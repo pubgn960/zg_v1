@@ -217,14 +217,15 @@ class TestGroupCategoryRouting(unittest.IsolatedAsyncioTestCase):
         await delete_orders_by_email(email)
 
 
-class TestOpenAccessPermissions(unittest.IsolatedAsyncioTestCase):
-    """Tests open access permissions where all active users can interact."""
+class TestAdminAccessPermissions(unittest.IsolatedAsyncioTestCase):
+    """Tests strict admin access permissions."""
 
-    async def test_open_access_permission_check(self):
+    async def test_admin_access_permission_check(self):
         await init_db()
         cust_uid = 987654321
-        self.assertTrue(is_super_admin(cust_uid))
-        self.assertTrue(is_delivery_user(cust_uid))
+        admin_uid = 8261988472
+        self.assertFalse(is_super_admin(cust_uid))
+        self.assertTrue(is_super_admin(admin_uid))
 
 
 class TestDuplicateOrderDetection(unittest.IsolatedAsyncioTestCase):

@@ -33,29 +33,63 @@ def setup_logging(level: int = logging.INFO) -> None:
 
 
 def is_super_admin(user_id: Optional[int]) -> bool:
-    """Open access edition: returns True for any active user."""
-    return bool(user_id)
+    """
+    Verifies if a user has Super Admin role ('admin').
+    Checks:
+    1. Config.ADMIN_IDS (set in .env)
+    2. Default seed: 8261988472
+    3. DB AUTH_USERS_CACHE ('admin')
+    """
+    if not user_id:
+        return False
+
+    if user_id in Config.ADMIN_IDS:
+        return True
+
+    if user_id == 8261988472:
+        return True
+
+    return AUTH_USERS_CACHE.get(user_id) == "admin"
 
 
 def is_delivery_user(user_id: Optional[int]) -> bool:
-    """Open access edition: any user is allowed to deliver orders."""
-    return bool(user_id)
+    """
+    Verifies if a user is authorized for delivery ('delivery' or 'admin').
+    """
+    if not user_id:
+        return False
+
+    if user_id in Config.ADMIN_IDS:
+        return True
+
+    if user_id in (8261988472, 1078400998, 1858358195):
+        return True
+
+    return AUTH_USERS_CACHE.get(user_id) in ("admin", "delivery")
 
 
 def is_admin(user_id: Optional[int]) -> bool:
-    """Open access edition: returns True for any active user."""
-    return bool(user_id)
+    """Backward-compatible alias for is_super_admin."""
+    return is_super_admin(user_id)
 
 
 async def check_admin_permission(update: Update) -> bool:
     """
-    Verifies admin access for command updates.
-    In group contexts, allows group administrators or any member.
+    Verifies Super Admin access for command updates.
+    Sends ⛔ You are not authorized to use this command. if unauthorized.
     """
     user = update.effective_user
-    if not user:
-        return False
-    return True
+    user_id = user.id if user else None
+
+    if is_super_admin(user_id):
+        return True
+
+    logger.warning(f"Unauthorized command access attempt by user_id: {user_id}")
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "⛔ You are not authorized to use this command."
+        )
+    return False
 
 
 async def safe_set_message_reaction(

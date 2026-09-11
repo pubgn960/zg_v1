@@ -1381,7 +1381,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     user_groups = await get_all_authorized_users()
-    admins = user_groups.get("admin", [1573531032])
+    admins = user_groups.get("admin", [8261988472])
     delivery_users = user_groups.get("delivery", [])
 
     lines = ["👑 Super Admin\n"]
