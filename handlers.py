@@ -22,7 +22,7 @@ import logging
 import asyncio
 from datetime import datetime, timezone
 from typing import Dict, Any
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import MessageEntity, Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ApplicationHandlerStop
 from telegram.error import TelegramError
 from sqlalchemy import update as update_sql, select
@@ -1697,7 +1697,8 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles /broadcast command for Super Admins.
-    Broadcasts message or replied-to media to all stored chat_ids in group_totals and client groups.
+    Broadcasts message or replied-to media/text to configured Client Groups only.
+    Preserves exact line breaks, emojis, paragraph spacing, formatting entities, and media.
     """
     user = update.effective_user
     if not is_super_admin(user.id if user else None):
@@ -1716,11 +1717,71 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     reply_to_msg = message.reply_to_message
-    raw_args = " ".join(context.args) if context.args else ""
 
-    if not reply_to_msg and not raw_args:
-        await message.reply_text("⚠️ Usage: <code>/broadcast &lt;message&gt;</code> or reply to a message with <code>/broadcast</code>", parse_mode="HTML")
-        return
+    # Extract exact broadcast text and entities when not replying to a message
+    broadcast_text = None
+    broadcast_entities = None
+
+    if not reply_to_msg:
+        full_text = message.text or message.caption or ""
+        full_entities = message.entities or message.caption_entities or []
+
+        # Strip leading /broadcast or /broadcast@botname command prefix along with space or newline
+        prefix_match = re.match(r'^/broadcast(?:@\w+)?(?:[ \t]*\r?\n|[ \t]+)?', full_text, re.IGNORECASE)
+        prefix_len = len(prefix_match.group(0)) if prefix_match else 0
+        broadcast_text = full_text[prefix_len:]
+
+        if not broadcast_text and not message.photo and not message.video and not message.document and not message.animation:
+            await message.reply_text("⚠️ Usage: <code>/broadcast &lt;message&gt;</code> or reply to a message with <code>/broadcast</code>", parse_mode="HTML")
+            return
+
+        # Shift entity offsets for the removed prefix
+        if full_entities:
+            adjusted_entities = []
+            for entity in full_entities:
+                off = getattr(entity, 'offset', None)
+                if off is None and isinstance(entity, dict):
+                    off = entity.get('offset', 0)
+                    length = entity.get('length', 0)
+                else:
+                    length = getattr(entity, 'length', 0)
+                    off = off or 0
+
+                if off + length <= prefix_len:
+                    continue
+                elif off >= prefix_len:
+                    new_off = off - prefix_len
+                    new_len = length
+                else:
+                    new_off = 0
+                    new_len = length - (prefix_len - off)
+
+                e_type = getattr(entity, 'type', None) or (entity.get('type') if isinstance(entity, dict) else None)
+                e_url = getattr(entity, 'url', None) or (entity.get('url') if isinstance(entity, dict) else None)
+                e_user = getattr(entity, 'user', None) or (entity.get('user') if isinstance(entity, dict) else None)
+                e_lang = getattr(entity, 'language', None) or (entity.get('language') if isinstance(entity, dict) else None)
+                e_emoji = getattr(entity, 'custom_emoji_id', None) or (entity.get('custom_emoji_id') if isinstance(entity, dict) else None)
+
+                try:
+                    new_ent = MessageEntity(
+                        type=e_type,
+                        offset=new_off,
+                        length=new_len,
+                        url=e_url,
+                        user=e_user,
+                        language=e_lang,
+                        custom_emoji_id=e_emoji
+                    )
+                    adjusted_entities.append(new_ent)
+                except Exception:
+                    if isinstance(entity, dict):
+                        e_dict = dict(entity)
+                        e_dict['offset'] = new_off
+                        e_dict['length'] = new_len
+                        adjusted_entities.append(e_dict)
+                    else:
+                        adjusted_entities.append(entity)
+            broadcast_entities = adjusted_entities if adjusted_entities else None
 
     await message.reply_text(f"⏳ Broadcast started for {len(all_target_chats)} target group(s)...")
 
@@ -1735,8 +1796,40 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     from_chat_id=reply_to_msg.chat_id,
                     message_id=reply_to_msg.message_id
                 )
+            elif message.photo:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=message.photo[-1].file_id,
+                    caption=broadcast_text if broadcast_text else None,
+                    caption_entities=broadcast_entities
+                )
+            elif message.video:
+                await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=message.video.file_id,
+                    caption=broadcast_text if broadcast_text else None,
+                    caption_entities=broadcast_entities
+                )
+            elif message.document:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=message.document.file_id,
+                    caption=broadcast_text if broadcast_text else None,
+                    caption_entities=broadcast_entities
+                )
+            elif message.animation:
+                await context.bot.send_animation(
+                    chat_id=chat_id,
+                    animation=message.animation.file_id,
+                    caption=broadcast_text if broadcast_text else None,
+                    caption_entities=broadcast_entities
+                )
             else:
-                await context.bot.send_message(chat_id=chat_id, text=raw_args)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=broadcast_text,
+                    entities=broadcast_entities
+                )
             success_count += 1
             await asyncio.sleep(0.1)
         except Exception as e:

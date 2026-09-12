@@ -1114,10 +1114,24 @@ class TestBroadcastFunctionality(unittest.IsolatedAsyncioTestCase):
         await init_db()
         CLIENT_GROUPS_CACHE.clear()
         LOADERS_CACHE.clear()
+        from sqlalchemy import delete
+        from models import ClientGroup, Loader
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(ClientGroup))
+            await session.execute(delete(Loader))
+            await session.commit()
 
     async def asyncTearDown(self):
         CLIENT_GROUPS_CACHE.clear()
         LOADERS_CACHE.clear()
+        from sqlalchemy import delete
+        from models import ClientGroup, Loader
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(ClientGroup))
+            await session.execute(delete(Loader))
+            await session.commit()
 
     async def test_get_broadcast_target_chat_ids_filtering(self):
         # Configure Client Group A & B
@@ -1151,6 +1165,14 @@ class TestBroadcastFunctionality(unittest.IsolatedAsyncioTestCase):
         update.effective_user.id = 999999
         update.effective_message.reply_to_message = None
         update.effective_message.reply_text = AsyncMock()
+        update.effective_message.text = "/broadcast Test Broadcast Message"
+        update.effective_message.caption = None
+        update.effective_message.entities = []
+        update.effective_message.caption_entities = []
+        update.effective_message.photo = None
+        update.effective_message.video = None
+        update.effective_message.document = None
+        update.effective_message.animation = None
 
         context = MagicMock()
         context.args = ["Test", "Broadcast", "Message"]
@@ -1166,7 +1188,70 @@ class TestBroadcastFunctionality(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(-100333, sent_chat_ids)
         self.assertNotIn(-100999, sent_chat_ids)
 
+    async def test_broadcast_formatting_preservation(self):
+        await set_client_group_category(-100111, "Client A", "A")
+        
+        expected_content = (
+            "🔥 Limited Time Very Cheap Offer Updated\n\n"
+            "⚡ Fast Service 1-3h | Maximum 6h\n\n"
+            "🎮 Activision and Facebook\n\n"
+            "10,800 CP → $63.5\n"
+            "5,220 CP → $32\n"
+            "5,000 CP → $31.5\n"
+            "2,400 CP → $15.5\n"
+            "880 CP → $7.5\n"
+            "420 CP → $4.5 (Slow)\n\n"
+            "🎁 Special Packs\n\n"
+            "4,800 CP → $28.5\n"
+            "7,200 CP → $41.5\n"
+            "9,600 CP → $54.5"
+        )
+        full_text = f"/broadcast {expected_content}"
+
+        mock_cmd_entity = MagicMock(offset=0, length=10, type="bot_command")
+        mock_bold_entity = MagicMock(offset=11, length=38, type="bold")
+
+        update = MagicMock()
+        update.effective_user.id = 999999
+        update.effective_message.reply_to_message = None
+        update.effective_message.reply_text = AsyncMock()
+        update.effective_message.text = full_text
+        update.effective_message.caption = None
+        update.effective_message.entities = [mock_cmd_entity, mock_bold_entity]
+        update.effective_message.caption_entities = []
+        update.effective_message.photo = None
+        update.effective_message.video = None
+        update.effective_message.document = None
+        update.effective_message.animation = None
+
+        context = MagicMock()
+        context.bot.send_message = AsyncMock()
+
+        with unittest.mock.patch("handlers.is_super_admin", return_value=True):
+            await broadcast_command(update, context)
+
+        context.bot.send_message.assert_called_once()
+        call_kwargs = context.bot.send_message.call_args.kwargs
+        self.assertEqual(call_kwargs.get("chat_id"), -100111)
+        self.assertEqual(call_kwargs.get("text"), expected_content)
+        
+        # Verify line breaks and emojis are intact
+        self.assertIn("\n\n", call_kwargs.get("text"))
+        self.assertIn("🔥", call_kwargs.get("text"))
+        self.assertIn("⚡", call_kwargs.get("text"))
+        self.assertIn("🎮", call_kwargs.get("text"))
+        self.assertIn("🎁", call_kwargs.get("text"))
+
+        # Verify entity offset shifted: 11 - 11 = 0
+        entities = call_kwargs.get("entities")
+        self.assertIsNotNone(entities)
+        self.assertEqual(len(entities), 1)
+        self.assertEqual(entities[0].offset, 0)
+        self.assertEqual(entities[0].length, 38)
+        self.assertEqual(entities[0].type, "bold")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
