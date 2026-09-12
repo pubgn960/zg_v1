@@ -13,7 +13,7 @@ import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple, Dict, Any
-from sqlalchemy import select, func, delete, update
+from sqlalchemy import select, func, delete, update, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -85,6 +85,32 @@ async def init_db() -> None:
     await get_or_create_settings()
     await reload_bot_settings_cache()
     await reload_loaders_cache()
+    await log_database_diagnostics()
+
+
+async def log_database_diagnostics() -> None:
+    """Log a secret-free proof of the database selected by this worker at startup."""
+    backend = "PostgreSQL" if Config.DATABASE_URL.startswith("postgresql+") else "SQLite"
+
+    async with AsyncSessionLocal() as session:
+        if backend == "PostgreSQL":
+            database_name = (await session.execute(text("SELECT current_database()"))).scalar_one()
+            logger.info(f"[DATABASE] Backend: PostgreSQL | Database identity: {database_name}")
+        else:
+            # This branch is for local development only; Config rejects it in production.
+            logger.info("[DATABASE] Backend: SQLite (local development only)")
+
+        loader_count = (await session.execute(select(func.count(Loader.id)))).scalar_one()
+        client_group_count = (await session.execute(select(func.count(ClientGroup.id)))).scalar_one()
+        settings_count = (await session.execute(select(func.count(Settings.id)))).scalar_one()
+        order_count = (await session.execute(select(func.count(Order.id)))).scalar_one()
+        group_total_count = (await session.execute(select(func.count(GroupTotal.chat_id)))).scalar_one()
+
+    logger.info(
+        "[DATABASE] Connection: SUCCESS | rows: "
+        f"loaders={loader_count}, client_groups={client_group_count}, settings={settings_count}, "
+        f"orders={order_count}, group_totals={group_total_count}"
+    )
 
 
 # ==========================================

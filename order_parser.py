@@ -1,6 +1,7 @@
 """
 Flexible Real Customer Order Detection Parser for Telegram Email Image Delivery Bot.
-Enforces that a customer message is classified as an ORDER ONLY when ALL 3 core conditions are met:
+Classifies a customer message as an ORDER when it contains a configured quick
+order marker, or when all 3 core conditions are met:
 1. LOGIN / EMAIL INFORMATION (valid email or login/email keywords)
 2. PASSWORD / CREDENTIALS (explicit keywords or unlabelled positional password on lines following email)
 3. PACKAGE (recognized CODM/CP package quantity, alias like 880Cp/72k/10800 CP, or addition pattern like 2400+880)
@@ -43,6 +44,14 @@ KNOWN_PACKAGES = {
     5, 80, 420, 880, 2400, 4800, 5000, 5040, 7200, 9600, 10800, 12000, 14400,
     16800, 19200, 21600, 24000, 38400, 43200, 48000, 72000, 96000, 100800, 108000
 }
+
+# User-configured quick order markers.  Any marker is sufficient to classify a
+# client message/caption as an order, even when the full details are sent later.
+ORDER_KEYWORDS = (
+    ".com", ".co", ".net", ".org", ".pk", ".io", ".gg",
+    "gmail", "gma", "hotmail", "hotmail.com", "outlook", "outlook.com",
+    "yahoo", "icloud", "proton", "+", "email",
+)
 
 # Package alias and multiplier pattern (e.g. 5k, 10k, 2.4k, 420x2, 880*3, 10800 CP, 880Cp, 5000Cp, 72k, 2400CP)
 PACKAGE_ALIAS_REGEX = re.compile(
@@ -108,7 +117,7 @@ def is_candidate_credential(line: str) -> bool:
 
 def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     """
-    Evaluates customer message against strict order rules:
+    Evaluates customer message against quick order markers or the full rule:
     VALID EMAIL + VALID CREDENTIAL/LOGIN INFORMATION + VALID PACKAGE.
     Platform is OPTIONAL.
 
@@ -194,10 +203,13 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
                     extracted_pkg = f"{num_val} CP"
                     break
 
-    # Determine missing required core conditions
+    # A configured quick marker allows early detection when a customer sends
+    # the details over multiple messages.  The full three-detail rule remains
+    # available for messages that do not contain any marker.
+    matched_keyword = next((keyword for keyword in ORDER_KEYWORDS if keyword in clean_text.lower()), None)
+
+    # Platform is useful metadata but customers often omit it.
     missing_conditions = []
-    if not platform_detected:
-        missing_conditions.append("Missing platform")
     if not login_detected:
         missing_conditions.append("Missing email/login info")
     if not credential_detected:
@@ -205,14 +217,20 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     if not package_detected:
         missing_conditions.append("Missing package")
 
-    order_detected = platform_detected and login_detected and credential_detected and package_detected
-    reason = "All required core conditions satisfied" if order_detected else ", ".join(missing_conditions)
+    details_detected = login_detected and credential_detected and package_detected
+    order_detected = bool(matched_keyword) or details_detected
+    if matched_keyword:
+        reason = f"Order keyword matched: {matched_keyword}"
+    elif details_detected:
+        reason = "All required core conditions satisfied"
+    else:
+        reason = ", ".join(missing_conditions)
 
     # Structured Debug Logging
     logger.info(
         f"[ORDER DETECTION] email_detected={login_detected}, credential_detected={credential_detected}, "
         f"package_detected={package_detected}, platform_detected={platform_detected}, "
-        f"email={extracted_email}, package={extracted_pkg}, platform={platform_name}"
+        f"email={extracted_email}, package={extracted_pkg}, platform={platform_name}, keyword={matched_keyword}"
     )
 
     if order_detected:
@@ -231,4 +249,3 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
         "package": extracted_pkg,
         "reason": reason
     }
-
