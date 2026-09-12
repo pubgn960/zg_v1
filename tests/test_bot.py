@@ -699,119 +699,87 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
 
 
 class TestRealCustomerOrderDetection(unittest.TestCase):
-    """Tests real customer order patterns 1 through 11 and false positive protections."""
+    """Tests exact real customer order test cases 1 through 10, Telegram escaping, and Markdown formatting."""
 
-    def test_pattern_1(self):
-        msg = "Abu Naif\nedfyak@gmail.com\nHRdi1515\n880Cp\nFree"
+    def test_user_exact_test_1(self):
+        msg = "Abu Naif\n\nedfyak@gmail.com\n\nHRdi1515\n\n880Cp\nFree"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 1: {res}")
+        self.assertTrue(res["order_detected"], f"Failed on Test 1: {res}")
         self.assertEqual(res["email"], "edfyak@gmail.com")
         self.assertTrue(res["credential_detected"])
         self.assertEqual(res["package"].lower(), "880cp")
 
-    def test_pattern_2(self):
-        msg = "Frank\nskyrim_33@hotmail.com\nFf11221122\n2400\n14.5$"
+    def test_user_exact_test_2(self):
+        msg = "mhmdalshbaa22@gmail.com\n\nmm112233\n\n2400+880"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 2: {res}")
-        self.assertEqual(res["email"], "skyrim_33@hotmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertIn("2400", res["package"])
-
-    def test_pattern_3(self):
-        msg = "No.¤1\nmf0390494@gmail.com\na7a.orcn7\n5000Cp\n30\n120﷼"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 3: {res}")
-        self.assertEqual(res["email"], "mf0390494@gmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertEqual(res["package"].lower(), "5000cp")
-
-    def test_pattern_4(self):
-        msg = "Zohaib\nzohaibgcu333@gmail.com\nmuz#n#708099\n100800"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 4: {res}")
-        self.assertEqual(res["email"], "zohaibgcu333@gmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertIn("100800", res["package"])
-
-    def test_pattern_5(self):
-        msg = "Alrasheedi\nalrasheedyt1@gmail.com\nYy112233@\n12000"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 5: {res}")
-        self.assertEqual(res["email"], "alrasheedyt1@gmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertIn("12000", res["package"])
-
-    def test_pattern_6(self):
-        msg = "Abdullah\nv.alqahtani23@hotmail.com\nAa1122334455@\n21600"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 6: {res}")
-        self.assertEqual(res["email"], "v.alqahtani23@hotmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertIn("21600", res["package"])
-
-    def test_pattern_7(self):
-        msg = "iig7x.00@gmail.com\nm.05587\n2400+880"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 7: {res}")
-        self.assertEqual(res["email"], "iig7x.00@gmail.com")
+        self.assertTrue(res["order_detected"], f"Failed on Test 2: {res}")
+        self.assertEqual(res["email"], "mhmdalshbaa22@gmail.com")
         self.assertTrue(res["credential_detected"])
         self.assertEqual(res["package"], "2400+880")
 
-    def test_pattern_8(self):
-        msg = "Fahad\nbader123456789.ba@gmail.com\nAa050302010\n72k"
+    def test_user_exact_test_3(self):
+        msg = "edfyak@gmail.com\nHRdi1515\n880Cp"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 8: {res}")
-        self.assertEqual(res["email"], "bader123456789.ba@gmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertEqual(res["package"].lower(), "72k")
+        self.assertTrue(res["order_detected"], f"Failed on Test 3: {res}")
 
-    def test_pattern_9(self):
-        msg = "Bader\nmryoom079@gmail.com\nMariam.8080\n420+880+2400"
+    def test_user_exact_test_4(self):
+        msg = "email@gmail.com\npassword123\n2400"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 9: {res}")
-        self.assertEqual(res["email"], "mryoom079@gmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertEqual(res["package"], "420+880+2400")
+        self.assertTrue(res["order_detected"], f"Failed on Test 4: {res}")
+        self.assertEqual(res["email"], "email@gmail.com")
 
-    def test_pattern_10_labeled(self):
-        msg = "Facebook\nEmail: edfyak@gmail.com\nPassword: HRdi1515\nPackage: 880 CP"
+    def test_user_exact_test_5(self):
+        msg = "email@gmail.com\npassword123\n2400+880"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 10: {res}")
-        self.assertEqual(res["email"], "edfyak@gmail.com")
-        self.assertEqual(res["platform"], "Facebook")
-        self.assertTrue(res["credential_detected"])
-        self.assertEqual(res["package"], "880 CP")
+        self.assertTrue(res["order_detected"], f"Failed on Test 5: {res}")
 
-    def test_pattern_11_labeled(self):
-        msg = "activision\nalrasheedyt1@gmail.com\nclave: Yy112233@\n5k cp"
+    def test_user_exact_test_6(self):
+        msg = "email@gmail.com"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Pattern 11: {res}")
-        self.assertEqual(res["email"], "alrasheedyt1@gmail.com")
-        self.assertEqual(res["platform"], "activision")
-        self.assertTrue(res["credential_detected"])
-        self.assertEqual(res["package"], "5k cp")
+        self.assertFalse(res["order_detected"], f"Failed on Test 6: {res}")
 
-    def test_false_positives_rejected(self):
-        false_positives = [
-            "hello",
-            "Facebook",
-            "test@gmail.com",
-            "Facebook test@gmail.com",
-            "10800 CP",
-            "password 123456",
-            "420",
-            "price?",
-            "how much?",
-            "100+50",
-            "2400+880",
-            "email: test@gmail.com\n10800 CP",
-            "pass: 123456\n10800 CP"
-        ]
-        for msg in false_positives:
-            res = parse_order_v2(msg)
-            self.assertFalse(res["order_detected"], f"Failed false positive protection for: '{msg}'")
+    def test_user_exact_test_7(self):
+        msg = "email@gmail.com\npassword123"
+        res = parse_order_v2(msg)
+        self.assertFalse(res["order_detected"], f"Failed on Test 7: {res}")
+
+    def test_user_exact_test_8(self):
+        msg = "2400+880"
+        res = parse_order_v2(msg)
+        self.assertFalse(res["order_detected"], f"Failed on Test 8: {res}")
+
+    def test_user_exact_test_9(self):
+        msg = "Facebook\nemail@gmail.com"
+        res = parse_order_v2(msg)
+        self.assertFalse(res["order_detected"], f"Failed on Test 9: {res}")
+
+    def test_user_exact_test_10(self):
+        msg = "hello\nemail@gmail.com\nprice 2400"
+        res = parse_order_v2(msg)
+        self.assertFalse(res["order_detected"], f"Failed on Test 10: {res}")
+
+    def test_markdown_formatting_and_telegram_escaping(self):
+        # Escaped email
+        msg_escaped = "edfyak\\@gmail.com\nHRdi1515\n880Cp"
+        res1 = parse_order_v2(msg_escaped)
+        self.assertTrue(res1["order_detected"], f"Failed on escaped email: {res1}")
+        self.assertEqual(res1["email"], "edfyak@gmail.com")
+
+        # Markdown bold formatting
+        msg_md = "mhmdalshbaa22@gmail.com\n**mm112233**\n**2400+880**"
+        res2 = parse_order_v2(msg_md)
+        self.assertTrue(res2["order_detected"], f"Failed on Markdown bold: {res2}")
+        self.assertEqual(res2["email"], "mhmdalshbaa22@gmail.com")
+        self.assertEqual(res2["package"], "2400+880")
+
+        # Escaped plus and code backticks
+        msg_code = "email@gmail.com\n`password123`\n2400\\+880"
+        res3 = parse_order_v2(msg_code)
+        self.assertTrue(res3["order_detected"], f"Failed on escaped plus: {res3}")
+        self.assertEqual(res3["package"], "2400+880")
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

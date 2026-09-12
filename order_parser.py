@@ -44,16 +44,32 @@ KNOWN_PACKAGES = {
     16800, 19200, 21600, 24000, 38400, 43200, 48000, 72000, 96000, 100800, 108000
 }
 
-# Package alias and multiplier pattern (e.g. 5k, 10k, 2.4k, 420x2, 880*3, 10800 CP, 880Cp, 5000Cp, 72k)
+# Package alias and multiplier pattern (e.g. 5k, 10k, 2.4k, 420x2, 880*3, 10800 CP, 880Cp, 5000Cp, 72k, 2400CP)
 PACKAGE_ALIAS_REGEX = re.compile(
-    r'\b(\d+(?:[\.\,]\d+)?\s*k(?:\s*cp)?|\d+\s*cp|\d+\s*cp|\d+\s*[x×*]\s*\d+|\d+\s*codm)\b',
+    r'\b(\d+(?:[\.\,]\d+)?\s*k(?:\s*cp)?|\d+\s*cp|\d+\s*[x×*]\s*\d+|\d+\s*codm)\b',
     re.IGNORECASE
 )
 
-# Multi-package addition pattern (e.g. 2400+880, 420+880+2400)
+# Multi-package addition pattern (e.g. 2400+880, 420+880+2400, 2400 + 880)
 ADDITION_PACKAGE_REGEX = re.compile(
     r'\b\d+(?:\s*\+\s*\d+)+\b'
 )
+
+
+def normalize_order_text(text: Optional[str]) -> str:
+    r"""
+    Normalizes Telegram/Markdown text before parsing:
+    - Unescapes Telegram backslash-escaped characters (\@, \_, \., \+, \-, \*, \~, \`, \#)
+    - Strips Markdown formatting wrappers (**, __, `, ~)
+    - Preserves line breaks and core credential values.
+    """
+    if not text:
+        return ""
+    # Unescape Telegram backslash-escaped characters
+    s = re.sub(r'\\([@_.\-+*~`#\\])', r'\1', text)
+    # Strip Markdown formatting tokens
+    s = re.sub(r'(\*\*|__|`|~)', '', s)
+    return s.strip()
 
 
 def is_candidate_credential(line: str) -> bool:
@@ -70,8 +86,8 @@ def is_candidate_credential(line: str) -> bool:
     # Not a platform
     if PLATFORM_REGEX.search(s):
         return False
-    # Not explicit price / currency (e.g. 14.5$, 120﷼, Free, 30$, 50 SAR)
-    if re.search(r'^\d+(?:\.\d+)?\s*[\$\﷼€£₹]|^\d+(?:\.\d+)?\s*sar|^free$', s, re.IGNORECASE):
+    # Not explicit price / currency (e.g. 14.5$, 120﷼, Free, 30$, 50 SAR, price 2400)
+    if re.search(r'^\d+(?:\.\d+)?\s*[\$\﷼€£₹]|^\d+(?:\.\d+)?\s*sar|^free$|\b(price|precio|cost|costo)\b', s, re.IGNORECASE):
         return False
     # Not multi-package addition
     if ADDITION_PACKAGE_REGEX.search(s):
@@ -121,7 +137,7 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
             "reason": "Empty text"
         }
 
-    clean_text = text.strip()
+    clean_text = normalize_order_text(text)
 
     # 1. OPTIONAL Condition: PLATFORM
     plat_match = PLATFORM_REGEX.search(clean_text)
@@ -188,8 +204,19 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
         missing_conditions.append("Missing package")
 
     order_detected = login_detected and credential_detected and package_detected
-
     reason = "All required core conditions satisfied" if order_detected else ", ".join(missing_conditions)
+
+    # Structured Debug Logging
+    logger.info(
+        f"[ORDER DETECTION] email_detected={login_detected}, credential_detected={credential_detected}, "
+        f"package_detected={package_detected}, platform_detected={platform_detected}, "
+        f"email={extracted_email}, package={extracted_pkg}, platform={platform_name}"
+    )
+
+    if order_detected:
+        logger.info("[ORDER DETECTION] TRUE")
+    else:
+        logger.info(f"[ORDER DETECTION] FALSE — missing: {reason}")
 
     return {
         "order_detected": order_detected,
