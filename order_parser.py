@@ -1,10 +1,11 @@
 """
-Strict 4-Condition Order Detection Parser for Telegram Email Image Delivery Bot.
-Enforces that a customer message is classified as an ORDER ONLY when ALL 4 conditions are met:
-1. PLATFORM (facebook, fb, meta, activision, activision id)
-2. LOGIN / EMAIL INFORMATION (valid email or login/email keywords)
-3. PASSWORD / CREDENTIALS (password, pass, pwd, login, contraseña, 2fa, recovery code, etc.)
-4. PACKAGE (recognized CODM/CP package quantity or format)
+Flexible Real Customer Order Detection Parser for Telegram Email Image Delivery Bot.
+Enforces that a customer message is classified as an ORDER ONLY when ALL 3 core conditions are met:
+1. LOGIN / EMAIL INFORMATION (valid email or login/email keywords)
+2. PASSWORD / CREDENTIALS (explicit keywords or unlabelled positional password on lines following email)
+3. PACKAGE (recognized CODM/CP package quantity, alias like 880Cp/72k/10800 CP, or addition pattern like 2400+880)
+
+Platform (Facebook, FB, Activision, Meta, etc.) is OPTIONAL and will be extracted if present.
 """
 
 import re
@@ -19,40 +20,81 @@ EMAIL_REGEX = re.compile(
     re.IGNORECASE
 )
 
-# Condition 1: Platform keywords
+# Optional Platform keywords
 PLATFORM_REGEX = re.compile(
-    r'\b(facebook|fb|meta|activision\s*id|activision)\b',
+    r'\b(facebook|fb|meta|activision\s*id|activision|psn|playstation|xbox|nintendo)\b',
     re.IGNORECASE
 )
 
-# Condition 2: Login / Email keywords
+# Login / Email keywords
 LOGIN_KEYWORDS_REGEX = re.compile(
     r'\b(email|mail|correo|correo\s+electr[oó]nico|correo\s+o\s+n[uú]mero(?:\s+fb)?)\b',
     re.IGNORECASE
 )
 
-# Condition 3: Password / Credential keywords
+# Explicit Password / Credential keywords
 CREDENTIAL_REGEX = re.compile(
     r'\b(password|pass|pwd|login|contrase[nñ]a(?:\s+de\s+fb)?|clave|c[oó]digos?|recovery(?:\s+codes?)?|backup\s+codes?|2fa|authenticator|nick|ign|usuario|nombre)\b',
     re.IGNORECASE
 )
 
-# Condition 4: Known CODM/CP package quantities
+# Known CODM/CP package quantities
 KNOWN_PACKAGES = {
-    5, 80, 420, 880, 2400, 5040, 7200, 9600, 10800, 12000, 14400,
-    16800, 19200, 21600, 24000, 38400, 43200, 48000, 72000, 96000, 108000
+    5, 80, 420, 880, 2400, 4800, 5000, 5040, 7200, 9600, 10800, 12000, 14400,
+    16800, 19200, 21600, 24000, 38400, 43200, 48000, 72000, 96000, 100800, 108000
 }
 
-# Package alias and multiplier pattern (e.g. 5k, 10k, 2.4k, 420x2, 880*3, 10800 CP)
+# Package alias and multiplier pattern (e.g. 5k, 10k, 2.4k, 420x2, 880*3, 10800 CP, 880Cp, 5000Cp, 72k)
 PACKAGE_ALIAS_REGEX = re.compile(
-    r'\b(\d+(?:[\.\,]\d+)?\s*k|\d+\s*cp|\d+\s*[x×*]\s*\d+|\d+\s*codm)\b',
+    r'\b(\d+(?:[\.\,]\d+)?\s*k(?:\s*cp)?|\d+\s*cp|\d+\s*cp|\d+\s*[x×*]\s*\d+|\d+\s*codm)\b',
     re.IGNORECASE
 )
+
+# Multi-package addition pattern (e.g. 2400+880, 420+880+2400)
+ADDITION_PACKAGE_REGEX = re.compile(
+    r'\b\d+(?:\s*\+\s*\d+)+\b'
+)
+
+
+def is_candidate_credential(line: str) -> bool:
+    """
+    Evaluates whether an unlabelled line after the email address line
+    can be classified as a positional password/credential.
+    """
+    s = line.strip()
+    if not s or len(s) < 4:
+        return False
+    # Not an email
+    if EMAIL_REGEX.search(s):
+        return False
+    # Not a platform
+    if PLATFORM_REGEX.search(s):
+        return False
+    # Not explicit price / currency (e.g. 14.5$, 120﷼, Free, 30$, 50 SAR)
+    if re.search(r'^\d+(?:\.\d+)?\s*[\$\﷼€£₹]|^\d+(?:\.\d+)?\s*sar|^free$', s, re.IGNORECASE):
+        return False
+    # Not multi-package addition
+    if ADDITION_PACKAGE_REGEX.search(s):
+        return False
+    # Not package alias (e.g. 880Cp, 72k, 10800 CP)
+    if PACKAGE_ALIAS_REGEX.search(s):
+        return False
+    # Not known standalone package number or small price/quantity number
+    if re.match(r'^\d+$', s):
+        val = int(s)
+        if val in KNOWN_PACKAGES or val < 100000:
+            return False
+    # Must contain valid password characters
+    if not re.search(r'[A-Za-z0-9#@._\-!$]', s):
+        return False
+    return True
 
 
 def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     """
-    Evaluates customer message against strict 4-condition system.
+    Evaluates customer message against strict order rules:
+    VALID EMAIL + VALID CREDENTIAL/LOGIN INFORMATION + VALID PACKAGE.
+    Platform is OPTIONAL.
 
     Returns:
         Dict[str, Any]: Decision object containing:
@@ -81,44 +123,63 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
 
     clean_text = text.strip()
 
-    # 1. Condition 1: PLATFORM
+    # 1. OPTIONAL Condition: PLATFORM
     plat_match = PLATFORM_REGEX.search(clean_text)
     platform_detected = bool(plat_match)
     platform_name = plat_match.group(0) if plat_match else None
 
-    # 2. Condition 2: LOGIN / EMAIL
+    # 2. Core Condition 1: LOGIN / EMAIL
     email_match = EMAIL_REGEX.search(clean_text)
     extracted_email = email_match.group(0).rstrip(".,;!)]>").lower() if email_match else None
     login_kw_match = LOGIN_KEYWORDS_REGEX.search(clean_text)
     login_detected = bool(extracted_email or login_kw_match)
 
-    # 3. Condition 3: PASSWORD / CREDENTIALS
+    # 3. Core Condition 2: PASSWORD / CREDENTIALS
     cred_match = CREDENTIAL_REGEX.search(clean_text)
     credential_detected = bool(cred_match)
 
-    # 4. Condition 4: PACKAGE
+    # Positional unlabelled credential check (lines following email)
+    lines = [l.strip() for l in clean_text.splitlines() if l.strip()]
+    email_line_idx = None
+    if extracted_email:
+        for idx, line in enumerate(lines):
+            if EMAIL_REGEX.search(line):
+                email_line_idx = idx
+                break
+
+    if not credential_detected and email_line_idx is not None:
+        for idx in range(email_line_idx + 1, len(lines)):
+            if is_candidate_credential(lines[idx]):
+                credential_detected = True
+                break
+
+    # 4. Core Condition 3: PACKAGE
     package_detected = False
     extracted_pkg = None
 
-    # Check alias/multiplier regex (e.g. 10800 CP, 5k, 420x2)
-    pkg_alias_match = PACKAGE_ALIAS_REGEX.search(clean_text)
-    if pkg_alias_match:
+    # First check multi-package addition pattern (e.g. 2400+880, 420+880+2400)
+    add_match = ADDITION_PACKAGE_REGEX.search(clean_text)
+    if add_match:
         package_detected = True
-        extracted_pkg = pkg_alias_match.group(0).strip()
+        extracted_pkg = add_match.group(0).strip()
     else:
-        # Check known numeric packages
-        numbers = re.findall(r'\b\d+\b', clean_text)
-        for num_str in numbers:
-            num_val = int(num_str)
-            if num_val in KNOWN_PACKAGES:
-                package_detected = True
-                extracted_pkg = f"{num_val} CP"
-                break
+        # Check alias/multiplier regex (e.g. 10800 CP, 880Cp, 5000Cp, 72k)
+        pkg_alias_match = PACKAGE_ALIAS_REGEX.search(clean_text)
+        if pkg_alias_match:
+            package_detected = True
+            extracted_pkg = pkg_alias_match.group(0).strip()
+        else:
+            # Check known numeric packages
+            numbers = re.findall(r'\b\d+\b', clean_text)
+            for num_str in numbers:
+                num_val = int(num_str)
+                if num_val in KNOWN_PACKAGES:
+                    package_detected = True
+                    extracted_pkg = f"{num_val} CP"
+                    break
 
-    # Determine missing conditions for reason
+    # Determine missing required core conditions
     missing_conditions = []
-    if not platform_detected:
-        missing_conditions.append("Missing platform")
     if not login_detected:
         missing_conditions.append("Missing email/login info")
     if not credential_detected:
@@ -126,9 +187,9 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     if not package_detected:
         missing_conditions.append("Missing package")
 
-    order_detected = platform_detected and login_detected and credential_detected and package_detected
+    order_detected = login_detected and credential_detected and package_detected
 
-    reason = "All 4 conditions satisfied" if order_detected else ", ".join(missing_conditions)
+    reason = "All required core conditions satisfied" if order_detected else ", ".join(missing_conditions)
 
     return {
         "order_detected": order_detected,
@@ -141,3 +202,4 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
         "package": extracted_pkg,
         "reason": reason
     }
+

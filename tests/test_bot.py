@@ -698,59 +698,100 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((b3, n3, t3), (150.0, 30.4, 180.4))
 
 
-class TestStrict4ConditionOrderDetection(unittest.TestCase):
-    """Tests all combinations of the strict 4-condition order detection system."""
+class TestRealCustomerOrderDetection(unittest.TestCase):
+    """Tests real customer order patterns 1 through 11 and false positive protections."""
 
-    def test_full_four_conditions_detected(self):
-        # Platform + Email + Password + Package -> TRUE
-        msg1 = "Facebook\nEmail: customer@gmail.com\nPassword: 123456\n10800 CP"
-        res1 = parse_order_v2(msg1)
-        self.assertTrue(res1["order_detected"])
-        self.assertEqual(res1["email"], "customer@gmail.com")
-        self.assertEqual(res1["platform"], "Facebook")
+    def test_pattern_1(self):
+        msg = "Abu Naif\nedfyak@gmail.com\nHRdi1515\n880Cp\nFree"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 1: {res}")
+        self.assertEqual(res["email"], "edfyak@gmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertEqual(res["package"].lower(), "880cp")
 
-        msg2 = "FB\ncorreo: customer@hotmail.com\npass: abc123\n420"
-        res2 = parse_order_v2(msg2)
-        self.assertTrue(res2["order_detected"])
+    def test_pattern_2(self):
+        msg = "Frank\nskyrim_33@hotmail.com\nFf11221122\n2400\n14.5$"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 2: {res}")
+        self.assertEqual(res["email"], "skyrim_33@hotmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertIn("2400", res["package"])
 
-        msg3 = "Activision\nemail: customer@gmail.com\nlogin: abc123\n2400 CP"
-        res3 = parse_order_v2(msg3)
-        self.assertTrue(res3["order_detected"])
+    def test_pattern_3(self):
+        msg = "No.¤1\nmf0390494@gmail.com\na7a.orcn7\n5000Cp\n30\n120﷼"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 3: {res}")
+        self.assertEqual(res["email"], "mf0390494@gmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertEqual(res["package"].lower(), "5000cp")
 
-        msg4 = "Meta\ncorreo o numero: user@gmail.com\nclave: pass123\n880 CP"
-        res4 = parse_order_v2(msg4)
-        self.assertTrue(res4["order_detected"])
+    def test_pattern_4(self):
+        msg = "Zohaib\nzohaibgcu333@gmail.com\nmuz#n#708099\n100800"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 4: {res}")
+        self.assertEqual(res["email"], "zohaibgcu333@gmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertIn("100800", res["package"])
 
-        msg5 = "Activision ID\nemail: user@outlook.com\n2fa: 123456\n10k"
-        res5 = parse_order_v2(msg5)
-        self.assertTrue(res5["order_detected"])
+    def test_pattern_5(self):
+        msg = "Alrasheedi\nalrasheedyt1@gmail.com\nYy112233@\n12000"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 5: {res}")
+        self.assertEqual(res["email"], "alrasheedyt1@gmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertIn("12000", res["package"])
 
-    def test_missing_conditions_rejected(self):
-        # Platform + Email + Package -> FALSE (Missing password/credentials)
-        msg_no_pass = "Facebook\nEmail: customer@gmail.com\n10800 CP"
-        res_no_pass = parse_order_v2(msg_no_pass)
-        self.assertFalse(res_no_pass["order_detected"])
-        self.assertIn("Missing password", res_no_pass["reason"])
+    def test_pattern_6(self):
+        msg = "Abdullah\nv.alqahtani23@hotmail.com\nAa1122334455@\n21600"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 6: {res}")
+        self.assertEqual(res["email"], "v.alqahtani23@hotmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertIn("21600", res["package"])
 
-        # Platform + Password + Package -> FALSE (Missing email/login info)
-        msg_no_email = "Facebook\nPassword: 123456\n10800 CP"
-        res_no_email = parse_order_v2(msg_no_email)
-        self.assertFalse(res_no_email["order_detected"])
-        self.assertIn("Missing email", res_no_email["reason"])
+    def test_pattern_7(self):
+        msg = "iig7x.00@gmail.com\nm.05587\n2400+880"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 7: {res}")
+        self.assertEqual(res["email"], "iig7x.00@gmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertEqual(res["package"], "2400+880")
 
-        # Email + Password + Package -> FALSE (Missing platform)
-        msg_no_plat = "Email: customer@gmail.com\nPassword: 123456\n10800 CP"
-        res_no_plat = parse_order_v2(msg_no_plat)
-        self.assertFalse(res_no_plat["order_detected"])
-        self.assertIn("Missing platform", res_no_plat["reason"])
+    def test_pattern_8(self):
+        msg = "Fahad\nbader123456789.ba@gmail.com\nAa050302010\n72k"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 8: {res}")
+        self.assertEqual(res["email"], "bader123456789.ba@gmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertEqual(res["package"].lower(), "72k")
 
-        # Platform + Email + Password -> FALSE (Missing package)
-        msg_no_pkg = "Facebook\nEmail: customer@gmail.com\nPassword: 123456"
-        res_no_pkg = parse_order_v2(msg_no_pkg)
-        self.assertFalse(res_no_pkg["order_detected"])
-        self.assertIn("Missing package", res_no_pkg["reason"])
+    def test_pattern_9(self):
+        msg = "Bader\nmryoom079@gmail.com\nMariam.8080\n420+880+2400"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 9: {res}")
+        self.assertEqual(res["email"], "mryoom079@gmail.com")
+        self.assertTrue(res["credential_detected"])
+        self.assertEqual(res["package"], "420+880+2400")
 
-    def test_false_positive_cases_rejected(self):
+    def test_pattern_10_labeled(self):
+        msg = "Facebook\nEmail: edfyak@gmail.com\nPassword: HRdi1515\nPackage: 880 CP"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 10: {res}")
+        self.assertEqual(res["email"], "edfyak@gmail.com")
+        self.assertEqual(res["platform"], "Facebook")
+        self.assertTrue(res["credential_detected"])
+        self.assertEqual(res["package"], "880 CP")
+
+    def test_pattern_11_labeled(self):
+        msg = "activision\nalrasheedyt1@gmail.com\nclave: Yy112233@\n5k cp"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed on Pattern 11: {res}")
+        self.assertEqual(res["email"], "alrasheedyt1@gmail.com")
+        self.assertEqual(res["platform"], "activision")
+        self.assertTrue(res["credential_detected"])
+        self.assertEqual(res["package"], "5k cp")
+
+    def test_false_positives_rejected(self):
         false_positives = [
             "hello",
             "Facebook",
@@ -762,20 +803,15 @@ class TestStrict4ConditionOrderDetection(unittest.TestCase):
             "price?",
             "how much?",
             "100+50",
-            "before 100 now 150"
+            "2400+880",
+            "email: test@gmail.com\n10800 CP",
+            "pass: 123456\n10800 CP"
         ]
         for msg in false_positives:
             res = parse_order_v2(msg)
-            self.assertFalse(res["order_detected"], f"Failed false positive test for message: '{msg}'")
-
-    def test_platform_variants(self):
-        platforms = ["Facebook", "FB", "Meta", "Activision", "Activision ID", "facebook", "fb", "meta", "activision"]
-        for plat in platforms:
-            text = f"{plat}\nEmail: user@gmail.com\nPassword: pass123\n420 CP"
-            res = parse_order_v2(text)
-            self.assertTrue(res["order_detected"], f"Platform variant failed for '{plat}'")
-            self.assertTrue(res["platform_detected"])
+            self.assertFalse(res["order_detected"], f"Failed false positive protection for: '{msg}'")
 
 
 if __name__ == "__main__":
     unittest.main()
+
