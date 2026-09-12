@@ -41,6 +41,7 @@ from handlers import (
     loader_text_wizard_handler,
     calc_command,
     calccancel_command,
+    process_calculator_input,
     calculator_text_handler,
     paid_command,
     undo_command,
@@ -969,6 +970,26 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         self.assertIn("before: 0", reply)
         self.assertIn("now: 3280", reply)
         self.assertIn("total: 3280", reply)
+
+    async def test_process_calculator_input_no_update_setattr_crash(self):
+        chat_id = -100999013
+        await paid_group_total(chat_id)
+
+        # Restricted spec update object that raises AttributeError on dynamic attribute assignment
+        update = MagicMock(spec=["effective_message", "effective_chat", "effective_user"])
+        update.effective_chat.id = chat_id
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.message_id = 9992
+        update.effective_message.text = "100+25"
+        update.effective_message.reply_text = AsyncMock()
+
+        context = MagicMock()
+        context.user_data = {}
+
+        # Must process without throwing AttributeError
+        res = await process_calculator_input(update, context)
+        self.assertTrue(res)
+        self.assertEqual(context.user_data.get("_calc_handled_msg_id"), 9992)
 
 
 class TestRealCustomerOrderDetection(unittest.TestCase):

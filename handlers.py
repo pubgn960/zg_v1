@@ -1551,46 +1551,62 @@ async def process_calculator_input(update: Update, context: ContextTypes.DEFAULT
         return False
 
     # Prevent double processing for the same message ID across handler groups
-    if getattr(update, '_calc_handled_msg_id', None) == message.message_id:
-        return True
+    if context and context.user_data is not None:
+        try:
+            if context.user_data.get("_calc_handled_msg_id") == message.message_id:
+                return True
+        except Exception:
+            pass
 
     text_content = (message.text or message.caption or "").strip()
     if not text_content:
         return False
 
-    # Check if message is '0' (remaining balance)
-    if text_content == "0":
-        setattr(update, '_calc_handled_msg_id', message.message_id)
-        logger.info(f"[CALCULATOR] Super Admin calculator input received")
-        logger.info(f"[CALCULATOR] Processing Super Admin message")
-        total_val = await get_group_total_balance(chat.id)
-        reply = f"💰 Remaining Amount: {format_num(total_val)}"
-        await message.reply_text(reply)
-        logger.info(f"[CALCULATOR] Result successfully calculated: remaining balance {total_val} for chat {chat.id}")
-        return True
-
-    # Check if message is a math expression or number
-    if is_math_expression(text_content):
-        setattr(update, '_calc_handled_msg_id', message.message_id)
-        logger.info(f"[CALCULATOR] Super Admin calculator input received")
-        logger.info(f"[CALCULATOR] Processing Super Admin message")
-        logger.info(f"[CALCULATOR] Processing expression: {text_content}")
-
-        is_valid, amount = evaluate_math_expression(text_content)
-        if is_valid and amount is not None:
-            before, now, total = await add_to_group_total(chat.id, amount)
-            reply = (
-                f"before: {format_num(before)}\n"
-                f"now: {format_num(now)}\n"
-                f"total: {format_num(total)}"
-            )
+    try:
+        # Check if message is '0' (remaining balance)
+        if text_content == "0":
+            if context and context.user_data is not None:
+                try:
+                    context.user_data["_calc_handled_msg_id"] = message.message_id
+                except Exception:
+                    pass
+            logger.info(f"[CALCULATOR] Super Admin calculator input received")
+            logger.info(f"[CALCULATOR] Processing Super Admin message")
+            total_val = await get_group_total_balance(chat.id)
+            reply = f"💰 Remaining Amount: {format_num(total_val)}"
             await message.reply_text(reply)
-            logger.info(f"[CALCULATOR] Result successfully calculated: added {now} in chat {chat.id} (Before: {before}, Total: {total})")
+            logger.info(f"[CALCULATOR] Result successfully calculated: remaining balance {total_val} for chat {chat.id}")
             return True
-        else:
-            await message.reply_text("❌ Invalid calculation.")
-            logger.info(f"[CALCULATOR] Invalid calculation attempt by Super Admin {user.id}: '{text_content}'")
-            return True
+
+        # Check if message is a math expression or number
+        if is_math_expression(text_content):
+            if context and context.user_data is not None:
+                try:
+                    context.user_data["_calc_handled_msg_id"] = message.message_id
+                except Exception:
+                    pass
+            logger.info(f"[CALCULATOR] Super Admin calculator input received")
+            logger.info(f"[CALCULATOR] Processing Super Admin message")
+            logger.info(f"[CALCULATOR] Processing expression: {text_content}")
+
+            is_valid, amount = evaluate_math_expression(text_content)
+            if is_valid and amount is not None:
+                before, now, total = await add_to_group_total(chat.id, amount)
+                reply = (
+                    f"before: {format_num(before)}\n"
+                    f"now: {format_num(now)}\n"
+                    f"total: {format_num(total)}"
+                )
+                await message.reply_text(reply)
+                logger.info(f"[CALCULATOR] Result successfully calculated: added {now} in chat {chat.id} (Before: {before}, Total: {total})")
+                return True
+            else:
+                await message.reply_text("❌ Invalid calculation.")
+                logger.info(f"[CALCULATOR] Invalid calculation attempt by Super Admin {user.id}: '{text_content}'")
+                return True
+    except Exception as e:
+        logger.exception(f"[CALCULATOR] Error processing calculator input: {e}")
+        return False
 
     return False
 
