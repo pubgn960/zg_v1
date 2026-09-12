@@ -995,8 +995,41 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
 class TestRealCustomerOrderDetection(unittest.TestCase):
     """Tests exact real customer order test cases 1 through 10, Telegram escaping, and Markdown formatting."""
 
+    def test_strict_four_conditions_test_a_valid(self):
+        msg = "Facebook\nEmail: test@gmail.com\nPassword: 123456\n10800 CP"
+        res = parse_order_v2(msg)
+        self.assertTrue(res["order_detected"], f"Failed Test A: {res}")
+        self.assertTrue(res["platform_detected"])
+        self.assertTrue(res["login_detected"])
+        self.assertTrue(res["credential_detected"])
+        self.assertTrue(res["package_detected"])
+
+    def test_strict_four_conditions_test_b_no_platform(self):
+        msg = "Email: test@gmail.com\nPassword: 123456\n10800"
+        res = parse_order_v2(msg)
+        self.assertFalse(res["order_detected"], f"Failed Test B: {res}")
+        self.assertFalse(res["platform_detected"])
+
+    def test_strict_four_conditions_test_c_no_email(self):
+        msg = "Facebook\nPassword: 123456\n10800 CP"
+        res = parse_order_v2(msg)
+        self.assertFalse(res["order_detected"], f"Failed Test C: {res}")
+        self.assertFalse(res["login_detected"])
+
+    def test_strict_four_conditions_test_d_no_password(self):
+        msg = "Facebook\nEmail: test@gmail.com\n10800 CP"
+        res = parse_order_v2(msg)
+        self.assertFalse(res["order_detected"], f"Failed Test D: {res}")
+        self.assertFalse(res["credential_detected"])
+
+    def test_strict_four_conditions_test_e_no_package(self):
+        msg = "Facebook\nEmail: test@gmail.com\nPassword: 123456"
+        res = parse_order_v2(msg)
+        self.assertFalse(res["order_detected"], f"Failed Test E: {res}")
+        self.assertFalse(res["package_detected"])
+
     def test_user_exact_test_1(self):
-        msg = "Abu Naif\n\nedfyak@gmail.com\n\nHRdi1515\n\n880Cp\nFree"
+        msg = "Facebook\nAbu Naif\n\nedfyak@gmail.com\n\nHRdi1515\n\n880Cp\nFree"
         res = parse_order_v2(msg)
         self.assertTrue(res["order_detected"], f"Failed on Test 1: {res}")
         self.assertEqual(res["email"], "edfyak@gmail.com")
@@ -1004,7 +1037,7 @@ class TestRealCustomerOrderDetection(unittest.TestCase):
         self.assertEqual(res["package"].lower(), "880cp")
 
     def test_user_exact_test_2(self):
-        msg = "mhmdalshbaa22@gmail.com\n\nmm112233\n\n2400+880"
+        msg = "Facebook\nmhmdalshbaa22@gmail.com\n\nmm112233\n\n2400+880"
         res = parse_order_v2(msg)
         self.assertTrue(res["order_detected"], f"Failed on Test 2: {res}")
         self.assertEqual(res["email"], "mhmdalshbaa22@gmail.com")
@@ -1012,18 +1045,18 @@ class TestRealCustomerOrderDetection(unittest.TestCase):
         self.assertEqual(res["package"], "2400+880")
 
     def test_user_exact_test_3(self):
-        msg = "edfyak@gmail.com\nHRdi1515\n880Cp"
+        msg = "Activision\nedfyak@gmail.com\nHRdi1515\n880Cp"
         res = parse_order_v2(msg)
         self.assertTrue(res["order_detected"], f"Failed on Test 3: {res}")
 
     def test_user_exact_test_4(self):
-        msg = "email@gmail.com\npassword123\n2400"
+        msg = "Facebook\nemail@gmail.com\npassword123\n2400 CP"
         res = parse_order_v2(msg)
         self.assertTrue(res["order_detected"], f"Failed on Test 4: {res}")
         self.assertEqual(res["email"], "email@gmail.com")
 
     def test_user_exact_test_5(self):
-        msg = "email@gmail.com\npassword123\n2400+880"
+        msg = "FB\nemail@gmail.com\npassword123\n2400+880"
         res = parse_order_v2(msg)
         self.assertTrue(res["order_detected"], f"Failed on Test 5: {res}")
 
@@ -1054,20 +1087,20 @@ class TestRealCustomerOrderDetection(unittest.TestCase):
 
     def test_markdown_formatting_and_telegram_escaping(self):
         # Escaped email
-        msg_escaped = "edfyak\\@gmail.com\nHRdi1515\n880Cp"
+        msg_escaped = "Facebook\nedfyak\\@gmail.com\nHRdi1515\n880Cp"
         res1 = parse_order_v2(msg_escaped)
         self.assertTrue(res1["order_detected"], f"Failed on escaped email: {res1}")
         self.assertEqual(res1["email"], "edfyak@gmail.com")
 
         # Markdown bold formatting
-        msg_md = "mhmdalshbaa22@gmail.com\n**mm112233**\n**2400+880**"
+        msg_md = "Facebook\nmhmdalshbaa22@gmail.com\n**mm112233**\n**2400+880**"
         res2 = parse_order_v2(msg_md)
         self.assertTrue(res2["order_detected"], f"Failed on Markdown bold: {res2}")
         self.assertEqual(res2["email"], "mhmdalshbaa22@gmail.com")
         self.assertEqual(res2["package"], "2400+880")
 
         # Escaped plus and code backticks
-        msg_code = "email@gmail.com\n`password123`\n2400\\+880"
+        msg_code = "Facebook\nemail@gmail.com\n`password123`\n2400\\+880"
         res3 = parse_order_v2(msg_code)
         self.assertTrue(res3["order_detected"], f"Failed on escaped plus: {res3}")
         self.assertEqual(res3["package"], "2400+880")

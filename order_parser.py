@@ -20,9 +20,9 @@ EMAIL_REGEX = re.compile(
     re.IGNORECASE
 )
 
-# Optional Platform keywords
+# Platform keywords (Facebook, FB, Meta, Activision, PSN, Xbox, Nintendo, CODM, CP, etc.)
 PLATFORM_REGEX = re.compile(
-    r'\b(facebook|fb|meta|activision\s*id|activision|psn|playstation|xbox|nintendo)\b',
+    r'\b(facebook|fb|meta|activision\s*id|activision|psn|playstation|xbox|nintendo|guest|codm|cp|codm\s*cp|garena|line|vk|apple|google|free)\b',
     re.IGNORECASE
 )
 
@@ -196,6 +196,8 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
 
     # Determine missing required core conditions
     missing_conditions = []
+    if not platform_detected:
+        missing_conditions.append("Missing platform")
     if not login_detected:
         missing_conditions.append("Missing email/login info")
     if not credential_detected:
@@ -203,7 +205,7 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     if not package_detected:
         missing_conditions.append("Missing package")
 
-    order_detected = login_detected and credential_detected and package_detected
+    order_detected = platform_detected and login_detected and credential_detected and package_detected
     reason = "All required core conditions satisfied" if order_detected else ", ".join(missing_conditions)
 
     # Structured Debug Logging
