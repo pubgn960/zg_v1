@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple, Dict, Any
 from sqlalchemy import select, func, delete, update
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import selectinload
 
 from config import Config
 from models import Base, Order, Image, Settings, ClientGroup, Loader
@@ -481,7 +481,7 @@ async def update_order_status(order_id: int, status: str) -> Optional[Order]:
         await session.commit()
 
         res = await session.execute(
-            select(Order).options(joinedload(Order.images)).where(Order.id == order_id)
+            select(Order).options(selectinload(Order.images)).where(Order.id == order_id)
         )
         return res.unique().scalar_one_or_none()
 
@@ -517,7 +517,7 @@ async def update_order_price(order_id: int, price_str: str, price_msg_id: Option
         await session.commit()
 
         res = await session.execute(
-            select(Order).options(joinedload(Order.images)).where(Order.id == order_id)
+            select(Order).options(selectinload(Order.images)).where(Order.id == order_id)
         )
         return res.unique().scalar_one_or_none()
 
@@ -609,7 +609,7 @@ async def get_order_by_id(order_id: int) -> Optional[Order]:
     async with AsyncSessionLocal() as session:
         stmt = (
             select(Order)
-            .options(joinedload(Order.images))
+            .options(selectinload(Order.images))
             .where(Order.id == order_id)
         )
         res = await session.execute(stmt)
@@ -622,7 +622,7 @@ async def get_pending_order_by_email(email: str) -> Optional[Order]:
     async with AsyncSessionLocal() as session:
         stmt = (
             select(Order)
-            .options(joinedload(Order.images))
+            .options(selectinload(Order.images))
             .where(Order.email == email_clean, Order.status.in_(["Pending", "Pending Approval", "Pending Payment"]))
             .order_by(Order.created_at.desc())
         )
@@ -635,7 +635,7 @@ async def get_order_by_loader_msg_id(loader_msg_id: int) -> Optional[Order]:
     async with AsyncSessionLocal() as session:
         stmt = (
             select(Order)
-            .options(joinedload(Order.images))
+            .options(selectinload(Order.images))
             .where(Order.loader_message_id == loader_msg_id)
         )
         res = await session.execute(stmt)
@@ -657,7 +657,7 @@ async def add_images_to_order(
         return None, False
 
     async with AsyncSessionLocal() as session:
-        stmt = select(Order).options(joinedload(Order.images)).where(Order.id == order_id)
+        stmt = select(Order).options(selectinload(Order.images)).where(Order.id == order_id)
         res = await session.execute(stmt)
         order = res.unique().scalar_one_or_none()
 
@@ -699,7 +699,7 @@ async def add_images_to_order(
         session.expire_all()
 
         res = await session.execute(
-            select(Order).options(joinedload(Order.images)).where(Order.id == order_id)
+            select(Order).options(selectinload(Order.images)).where(Order.id == order_id)
         )
         updated_order = res.unique().scalar_one()
 
@@ -723,7 +723,7 @@ async def mark_order_delivered(order_id: int) -> Optional[Order]:
         await session.commit()
 
         res = await session.execute(
-            select(Order).options(joinedload(Order.images)).where(Order.id == order_id)
+            select(Order).options(selectinload(Order.images)).where(Order.id == order_id)
         )
         order = res.unique().scalar_one_or_none()
         logger.info(f"Delivery Completed | Order ID: #{order_id} marked as Delivered.")
@@ -733,7 +733,7 @@ async def mark_order_delivered(order_id: int) -> Optional[Order]:
 async def cancel_order(order_id: int) -> Tuple[Optional[Order], bool]:
     """Cancels a pending order."""
     async with AsyncSessionLocal() as session:
-        stmt = select(Order).options(joinedload(Order.images)).where(Order.id == order_id)
+        stmt = select(Order).options(selectinload(Order.images)).where(Order.id == order_id)
         res = await session.execute(stmt)
         order = res.unique().scalar_one_or_none()
 
@@ -761,7 +761,7 @@ async def get_pending_orders() -> List[Order]:
     async with AsyncSessionLocal() as session:
         stmt = (
             select(Order)
-            .options(joinedload(Order.images))
+            .options(selectinload(Order.images))
             .where(Order.status.in_(["Pending", "Pending Approval", "Pending Payment"]))
             .order_by(Order.created_at.desc())
         )
@@ -774,7 +774,7 @@ async def get_delivered_orders(limit: int = 15) -> List[Order]:
     async with AsyncSessionLocal() as session:
         stmt = (
             select(Order)
-            .options(joinedload(Order.images))
+            .options(selectinload(Order.images))
             .where(Order.status == "Delivered")
             .order_by(Order.delivered_at.desc())
             .limit(limit)
@@ -789,7 +789,7 @@ async def get_all_orders_by_email(email: str) -> List[Order]:
     async with AsyncSessionLocal() as session:
         stmt = (
             select(Order)
-            .options(joinedload(Order.images))
+            .options(selectinload(Order.images))
             .where(Order.email == email_clean)
             .order_by(Order.created_at.desc())
         )
@@ -808,6 +808,8 @@ async def delete_orders_by_email(email: str) -> int:
         if not ids:
             return 0
 
+        # Delete associated images explicitly to prevent orphaned records in bulk deletes
+        await session.execute(delete(Image).where(Image.order_id.in_(ids)))
         del_stmt = delete(Order).where(Order.id.in_(ids))
         result = await session.execute(del_stmt)
         await session.commit()

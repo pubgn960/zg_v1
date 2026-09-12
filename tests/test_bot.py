@@ -16,6 +16,7 @@ import unittest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from telegram import BotCommand
+from telegram.ext import ApplicationHandlerStop
 
 from email_parser import extract_email, extract_order_id, extract_package, extract_last_email
 from keywords import contains_order_keyword
@@ -385,6 +386,7 @@ class TestTwoGroupDatabaseWorkflow(unittest.IsolatedAsyncioTestCase):
 
         # 1. Customer Order Creation in Client Group
         email = "twogroup_flow@example.com"
+        await delete_orders_by_email(email)
         order = await create_order(
             email=email,
             client_chat_id=-1001111111111,
@@ -596,7 +598,8 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         update_before.effective_message.text = "100"
         update_before.effective_message.reply_text = AsyncMock()
 
-        await calculator_text_session_handler(update_before, MagicMock())
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_session_handler(update_before, MagicMock())
         self.assertTrue(has_active_calculator_session(sa_uid))
         before_reply = update_before.effective_message.reply_text.call_args[0][0]
         self.assertIn("Enter NOW value:", before_reply)
@@ -607,7 +610,8 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         update_now.effective_message.text = "150"
         update_now.effective_message.reply_text = AsyncMock()
 
-        await calculator_text_session_handler(update_now, MagicMock())
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_session_handler(update_now, MagicMock())
         self.assertFalse(has_active_calculator_session(sa_uid))
         now_reply = update_now.effective_message.reply_text.call_args[0][0]
         self.assertIn("Before:</b> 100", now_reply)

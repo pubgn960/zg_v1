@@ -144,7 +144,7 @@ def start_calculator_session(user_id: int) -> str:
     Initializes step to 'before'.
     """
     CALCULATOR_SESSIONS[user_id] = {"step": "before"}
-    logger.info(f"[CALC] Started calculator session for user_id: {user_id}")
+    logger.info(f"[CALC] Started calculator session for Super Admin {user_id}")
     return "🧮 <b>Calculator</b>\n\nEnter BEFORE value:"
 
 
@@ -154,7 +154,7 @@ def cancel_calculator_session(user_id: int) -> str:
     """
     existed = CALCULATOR_SESSIONS.pop(user_id, None)
     if existed:
-        logger.info(f"[CALC] Cancelled calculator session for user_id: {user_id}")
+        logger.info(f"[CALC] Cancelled calculator session for Super Admin {user_id}")
     return "❌ Calculator cancelled."
 
 
@@ -176,7 +176,7 @@ def process_calculator_session_input(user_id: int, text: str) -> str:
     try:
         val = safe_eval(text.strip())
     except Exception as e:
-        logger.debug(f"[CALC] Invalid numeric input '{text}' from user {user_id}: {e}")
+        logger.debug(f"[CALC] Invalid numeric input '{text}' from Super Admin {user_id}: {e}")
         return "❌ Please enter a valid number."
 
     step = session.get("step")
@@ -185,14 +185,15 @@ def process_calculator_session_input(user_id: int, text: str) -> str:
             "step": "now",
             "before": val
         }
-        logger.info(f"[CALC] User {user_id} set BEFORE = {val}")
+        logger.info(f"[CALC] Received BEFORE {val} from Super Admin {user_id}")
         return "Enter NOW value:"
     elif step == "now":
         before_val = session.get("before", 0)
         now_val = val
         total = now_val - before_val
         CALCULATOR_SESSIONS.pop(user_id, None)
-        logger.info(f"[CALC] Completed calculation for user {user_id}: Before={before_val}, Now={now_val}, Total={total}")
+        logger.info(f"[CALC] Received NOW {now_val} from Super Admin {user_id}")
+        logger.info(f"[CALC] Calculation completed for Super Admin {user_id}: {format_signed_num(total)}")
         return (
             "🧮 <b>Calculation</b>\n\n"
             f"<b>Before:</b> {format_num(before_val)}\n"

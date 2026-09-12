@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Any
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ApplicationHandlerStop
 from telegram.error import TelegramError
 from sqlalchemy import update as update_sql, select
 
@@ -129,6 +129,8 @@ async def source_group_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Super Admin Ignore: Completely ignore any normal message sent by a Super Admin in Client Group
     if user and is_super_admin(user.id):
+        if has_active_calculator_session(user.id):
+            return
         logger.info(f"[CLIENT] Ignored message {message.message_id} from Super Admin ({user.id}) in Client Group.")
         return
 
@@ -1488,6 +1490,7 @@ async def calculator_text_session_handler(update: Update, context: ContextTypes.
 
     response_html = process_calculator_session_input(user.id, text_content)
     await message.reply_text(response_html, parse_mode="HTML")
+    raise ApplicationHandlerStop()
 
 
 # ==========================================
