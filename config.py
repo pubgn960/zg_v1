@@ -72,7 +72,28 @@ class Config:
         """Parses and validates environment settings."""
         cls.BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
         cls.RAW_ADMIN_IDS = os.getenv("ADMIN_IDS", "")
-        cls.DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///bot_database.db")
+
+        # Check Railway / Production Database URL requirement
+        is_railway = bool(
+            os.getenv("RAILWAY_ENVIRONMENT") or
+            os.getenv("RAILWAY_SERVICE_ID") or
+            os.getenv("RAILWAY_PROJECT_ID") or
+            os.getenv("ENVIRONMENT", "").lower() in ("production", "prod") or
+            os.getenv("REQUIRE_POSTGRES", "").lower() in ("true", "1")
+        )
+
+        raw_db_url = os.getenv("DATABASE_URL", "").strip()
+        if is_railway and not raw_db_url:
+            err_msg = (
+                "CRITICAL: DATABASE_URL is missing in Railway/production environment! "
+                "SQLite fallback is disabled in production to prevent ephemeral data loss. "
+                "Please configure DATABASE_URL in your Railway Worker environment variables."
+            )
+            logger.critical(err_msg)
+            raise ValueError(err_msg)
+
+        cls.DATABASE_URL = raw_db_url or "sqlite+aiosqlite:///bot_database.db"
+
         cls.PAYMENT_REVIEW_GROUP_ID = safe_int("PAYMENT_REVIEW_GROUP_ID", -1004441603990)
         cls.MEDIA_GROUP_TIMEOUT = safe_float("MEDIA_GROUP_TIMEOUT", 2.0)
         cls.USER_SESSION_TIMEOUT = safe_float("USER_SESSION_TIMEOUT", 300.0)
