@@ -1075,6 +1075,8 @@ async def loaderadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if uid:
             LOADER_ADD_SESSION.pop(uid, None)
 
+        logger.info(f"[LOADER] Saved Loader Group ID: {group_id}")
+
         msg_text = (
             f"✅ <b>Loader Group added successfully.</b>\n\n"
             f"<b>Loader Group ID:</b>\n<code>{group_id}</code>"
@@ -1092,6 +1094,7 @@ async def loaderadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "chat_id": chat.id if chat else None,
             "created_at": datetime.now(timezone.utc)
         }
+        logger.info(f"[LOADER] Waiting for Loader Group ID from admin user {uid}")
         await update.effective_message.reply_text("Send Loader Group ID")
 
 
@@ -1169,6 +1172,7 @@ async def loader_text_wizard_handler(update: Update, context: ContextTypes.DEFAU
         try:
             await add_loader(group_id, loader_name)
             await reload_loaders_cache()
+            logger.info(f"[LOADER] Saved Loader Group ID: {group_id}")
             msg_text = (
                 f"✅ <b>Loader Group added successfully.</b>\n\n"
                 f"<b>Loader Group ID:</b>\n<code>{group_id}</code>\n"
@@ -1288,6 +1292,7 @@ async def remove_category_command(update: Update, context: ContextTypes.DEFAULT_
     await remove_client_group_category(chat.id)
 
     await update.effective_message.reply_text("✅ Group category removed successfully.")
+
 
 
 async def paymentgroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
