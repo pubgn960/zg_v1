@@ -1,13 +1,13 @@
 """
-Safe mathematical evaluator and Before/Now change calculator for Telegram Email Image Delivery Bot.
-Provides AST-whitelist arithmetic evaluation, Before/Now/Total accounting parser, and HTML response formatting.
+Safe mathematical evaluator and Multi-Message Interactive Calculator Session for Telegram Email Image Delivery Bot.
+Provides AST-whitelist arithmetic evaluation, interactive per-user Super Admin calculator sessions, and HTML response formatting.
 Exclusively handles math and memory calculations without database queries or eval().
 """
 
 import ast
 import re
 import logging
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,9 @@ MAX_EXPR_LENGTH = 200
 MAX_EXPONENT = 1000
 # Maximum allowed AST node count
 MAX_AST_NODES = 50
+
+# Per-user in-memory calculator session dictionary (user_id -> {"step": "before" | "now", "before": float/int})
+CALCULATOR_SESSIONS: Dict[int, Dict[str, Any]] = {}
 
 
 class SafeEvalVisitor(ast.NodeVisitor):
@@ -131,20 +134,82 @@ def format_signed_num(val: Union[int, float]) -> str:
     return formatted
 
 
+# ==========================================
+# Interactive Multi-Message Session API
+# ==========================================
+
+def start_calculator_session(user_id: int) -> str:
+    """
+    Starts an interactive multi-message calculator session for a Super Admin.
+    Initializes step to 'before'.
+    """
+    CALCULATOR_SESSIONS[user_id] = {"step": "before"}
+    logger.info(f"[CALC] Started calculator session for user_id: {user_id}")
+    return "🧮 <b>Calculator</b>\n\nEnter BEFORE value:"
+
+
+def cancel_calculator_session(user_id: int) -> str:
+    """
+    Cancels an active calculator session for a Super Admin.
+    """
+    existed = CALCULATOR_SESSIONS.pop(user_id, None)
+    if existed:
+        logger.info(f"[CALC] Cancelled calculator session for user_id: {user_id}")
+    return "❌ Calculator cancelled."
+
+
+def has_active_calculator_session(user_id: int) -> bool:
+    """
+    Checks whether a Super Admin has an active calculator session.
+    """
+    return user_id in CALCULATOR_SESSIONS
+
+
+def process_calculator_session_input(user_id: int, text: str) -> str:
+    """
+    Processes numeric input for active calculator session (Step 1 BEFORE / Step 2 NOW).
+    """
+    session = CALCULATOR_SESSIONS.get(user_id)
+    if not session:
+        return "❌ No active calculator session."
+
+    try:
+        val = safe_eval(text.strip())
+    except Exception as e:
+        logger.debug(f"[CALC] Invalid numeric input '{text}' from user {user_id}: {e}")
+        return "❌ Please enter a valid number."
+
+    step = session.get("step")
+    if step == "before":
+        CALCULATOR_SESSIONS[user_id] = {
+            "step": "now",
+            "before": val
+        }
+        logger.info(f"[CALC] User {user_id} set BEFORE = {val}")
+        return "Enter NOW value:"
+    elif step == "now":
+        before_val = session.get("before", 0)
+        now_val = val
+        total = now_val - before_val
+        CALCULATOR_SESSIONS.pop(user_id, None)
+        logger.info(f"[CALC] Completed calculation for user {user_id}: Before={before_val}, Now={now_val}, Total={total}")
+        return (
+            "🧮 <b>Calculation</b>\n\n"
+            f"<b>Before:</b> {format_num(before_val)}\n"
+            f"<b>Now:</b> {format_num(now_val)}\n"
+            f"<b>Total:</b> {format_signed_num(total)}"
+        )
+
+    CALCULATOR_SESSIONS.pop(user_id, None)
+    return "❌ Invalid session state."
+
+
 def parse_before_now(text: str) -> List[Tuple[Union[int, float], Union[int, float], Union[int, float]]]:
     """
-    Parses 'before' and 'now' value pairs from input string.
-    Supports formats:
-    - /calc before 100 now 150
-    - /calc Before: 100 Now: 150
-    - /calc before=100 now=150
-    - /calc before 100 now 150 before 500 now 350
-    Returns list of tuples: [(before_val, now_val, total), ...]
+    Parses 'before' and 'now' value pairs from input string (Single-line helper).
     """
-    # Tokenize input looking for before ... now or now ... before pairs
     results = []
 
-    # Pattern for before ... now
     pattern_bn = re.compile(
         r'before\s*[:=]?\s*([^\s\a-zA-Z]+|\(?[-+*/.0-9()]+\)?)\s*now\s*[:=]?\s*([^\s\a-zA-Z]+|\(?[-+*/.0-9()]+\)?)',
         re.IGNORECASE
@@ -159,7 +224,6 @@ def parse_before_now(text: str) -> List[Tuple[Union[int, float], Union[int, floa
             results.append((b_val, n_val, total))
         return results
 
-    # Pattern for now ... before
     pattern_nb = re.compile(
         r'now\s*[:=]?\s*([^\s\a-zA-Z]+|\(?[-+*/.0-9()]+\)?)\s*before\s*[:=]?\s*([^\s\a-zA-Z]+|\(?[-+*/.0-9()]+\)?)',
         re.IGNORECASE
@@ -179,9 +243,8 @@ def parse_before_now(text: str) -> List[Tuple[Union[int, float], Union[int, floa
 
 def calculate_input(raw_args: str) -> str:
     """
-    Main entry point for processing calculator command input text.
+    Single-line entry point for processing calculator command input text.
     Handles Before/Now mode and Direct Math mode.
-    Returns HTML formatted result message.
     """
     clean_text = raw_args.strip()
     if not clean_text:
@@ -193,7 +256,6 @@ def calculate_input(raw_args: str) -> str:
             "• <code>/calc before 100 now 150 before 500 now 350</code>"
         )
 
-    # Check if input contains 'before' or 'now' keywords (Before/Now Mode)
     if re.search(r'\bbefore\b|\bnow\b', clean_text, re.IGNORECASE):
         try:
             pairs = parse_before_now(clean_text)
@@ -233,7 +295,6 @@ def calculate_input(raw_args: str) -> str:
                 "Use: <code>/calc before 100 now 150</code>"
             )
 
-    # Direct Math Mode
     try:
         val = safe_eval(clean_text)
         return f"🧮 <b>Result:</b> {format_num(val)}"

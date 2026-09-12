@@ -23,8 +23,25 @@ from delivery import chunk_list
 from media_collector import user_session_manager
 from utils import is_super_admin, is_delivery_user
 from main import validate_bot_command
-from calculator import safe_eval, parse_before_now, calculate_input
-from handlers import LOADER_ADD_SESSION, is_valid_price_string, source_group_handler, edited_message_handler, calc_command
+from calculator import (
+    safe_eval,
+    parse_before_now,
+    calculate_input,
+    start_calculator_session,
+    cancel_calculator_session,
+    has_active_calculator_session,
+    process_calculator_session_input,
+    CALCULATOR_SESSIONS
+)
+from handlers import (
+    LOADER_ADD_SESSION,
+    is_valid_price_string,
+    source_group_handler,
+    edited_message_handler,
+    calc_command,
+    calccancel_command,
+    calculator_text_session_handler
+)
 from database import (
     BOT_SETTINGS,
     AUTH_USERS_CACHE,
@@ -556,6 +573,79 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         update.effective_message.reply_text.assert_called_once()
         called_text = update.effective_message.reply_text.call_args[0][0]
         self.assertIn("Total:</b> +50", called_text)
+
+    async def test_interactive_calculator_session_flow(self):
+        sa_uid = 8261988472
+        CALCULATOR_SESSIONS.pop(sa_uid, None)
+
+        # 1. Start session with /calc
+        update_start = MagicMock()
+        update_start.effective_user.id = sa_uid
+        update_start.effective_message.reply_text = AsyncMock()
+        context_start = MagicMock()
+        context_start.args = []
+
+        await calc_command(update_start, context_start)
+        self.assertTrue(has_active_calculator_session(sa_uid))
+        start_reply = update_start.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Enter BEFORE value:", start_reply)
+
+        # 2. Step 1: Send BEFORE value (100)
+        update_before = MagicMock()
+        update_before.effective_user.id = sa_uid
+        update_before.effective_message.text = "100"
+        update_before.effective_message.reply_text = AsyncMock()
+
+        await calculator_text_session_handler(update_before, MagicMock())
+        self.assertTrue(has_active_calculator_session(sa_uid))
+        before_reply = update_before.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Enter NOW value:", before_reply)
+
+        # 3. Step 2: Send NOW value (150)
+        update_now = MagicMock()
+        update_now.effective_user.id = sa_uid
+        update_now.effective_message.text = "150"
+        update_now.effective_message.reply_text = AsyncMock()
+
+        await calculator_text_session_handler(update_now, MagicMock())
+        self.assertFalse(has_active_calculator_session(sa_uid))
+        now_reply = update_now.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Before:</b> 100", now_reply)
+        self.assertIn("Now:</b> 150", now_reply)
+        self.assertIn("Total:</b> +50", now_reply)
+
+    async def test_interactive_calculator_negative_and_zero_and_cancel(self):
+        sa_uid = 8261988472
+        CALCULATOR_SESSIONS.pop(sa_uid, None)
+
+        # Negative test (500 -> 350 => -150)
+        start_calculator_session(sa_uid)
+        process_calculator_session_input(sa_uid, "500")
+        res_neg = process_calculator_session_input(sa_uid, "350")
+        self.assertIn("Total:</b> -150", res_neg)
+        self.assertFalse(has_active_calculator_session(sa_uid))
+
+        # Zero test (100 -> 100 => 0)
+        start_calculator_session(sa_uid)
+        process_calculator_session_input(sa_uid, "100")
+        res_zero = process_calculator_session_input(sa_uid, "100")
+        self.assertIn("Total:</b> 0", res_zero)
+        self.assertFalse(has_active_calculator_session(sa_uid))
+
+        # Invalid input keeps session active
+        start_calculator_session(sa_uid)
+        inv_res = process_calculator_session_input(sa_uid, "invalid_abc")
+        self.assertIn("valid number", inv_res)
+        self.assertTrue(has_active_calculator_session(sa_uid))
+
+        # Cancel session with /calccancel
+        update_cancel = MagicMock()
+        update_cancel.effective_user.id = sa_uid
+        update_cancel.effective_message.reply_text = AsyncMock()
+        await calccancel_command(update_cancel, MagicMock())
+        self.assertFalse(has_active_calculator_session(sa_uid))
+        cancel_reply = update_cancel.effective_message.reply_text.call_args[0][0]
+        self.assertIn("cancelled", cancel_reply)
 
 
 if __name__ == "__main__":

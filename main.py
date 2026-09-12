@@ -64,7 +64,9 @@ from handlers import (
     removesource_command,
     removedelivery_command,
     resetgroups_command,
-    calc_command
+    calc_command,
+    calccancel_command,
+    calculator_text_session_handler
 )
 
 # Initialize application logging
@@ -136,7 +138,8 @@ async def post_init(application: Application) -> None:
         BotCommand("pending", "Pending Orders"),
         BotCommand("find", "Find Order"),
         BotCommand("stats", "Statistics"),
-        BotCommand("calc", "Calculator")
+        BotCommand("calc", "Calculator"),
+        BotCommand("calccancel", "Cancel Calculator")
     ]
 
     valid_commands = []
@@ -221,13 +224,21 @@ def main() -> None:
     application.add_handler(CommandHandler("backup", backup_command))
     application.add_handler(CommandHandler("restore", restore_command))
     application.add_handler(CommandHandler(["calc", "calculate"], calc_command))
+    application.add_handler(CommandHandler("calccancel", calccancel_command))
 
     # Register Interactive Callback Query Handlers
     application.add_handler(CallbackQueryHandler(duplicate_order_callback_handler, pattern="^dup_"))
     application.add_handler(CallbackQueryHandler(category_b_approval_callback_handler, pattern="^catb_"))
     application.add_handler(CallbackQueryHandler(price_callback_handler, pattern="^price_"))
 
-    # Register loader_text_wizard_handler and price_input_text_handler
+    # Register text wizard and session handlers in group 0
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & (~filters.COMMAND),
+            calculator_text_session_handler
+        ),
+        group=0
+    )
     application.add_handler(
         MessageHandler(
             filters.TEXT & (~filters.COMMAND),

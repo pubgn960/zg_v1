@@ -31,7 +31,13 @@ from keywords import contains_order_keyword
 from email_parser import extract_email, extract_order_id, extract_package, extract_last_email
 from media_collector import media_collector, user_session_manager
 from delivery import deliver_order_by_id, deliver_images_for_email
-from calculator import calculate_input
+from calculator import (
+    calculate_input,
+    start_calculator_session,
+    cancel_calculator_session,
+    has_active_calculator_session,
+    process_calculator_session_input
+)
 from database import (
     BOT_SETTINGS,
     AUTH_USERS_CACHE,
@@ -1412,7 +1418,8 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles /calc and /calculate commands for Super Admins.
-    Evaluates arithmetic expressions or Before/Now accounting calculations securely.
+    If args are provided (e.g. /calc before 100 now 150), evaluates directly.
+    Otherwise, starts an interactive multi-message calculator session.
     """
     user = update.effective_user
     user_id = user.id if user else None
@@ -1430,9 +1437,57 @@ async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if len(parts) > 1:
             raw_args = parts[1]
 
-    response_html = calculate_input(raw_args)
+    if raw_args:
+        response_html = calculate_input(raw_args)
+    else:
+        response_html = start_calculator_session(user_id)
+
     if update.effective_message:
         await update.effective_message.reply_text(response_html, parse_mode="HTML")
+
+
+async def calccancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles /calccancel command for Super Admins.
+    Cancels an active interactive calculator session.
+    """
+    user = update.effective_user
+    user_id = user.id if user else None
+
+    if not is_super_admin(user_id):
+        logger.warning(f"Unauthorized calccancel access attempt by user_id: {user_id}")
+        if update.effective_message:
+            await update.effective_message.reply_text("⛔ You are not authorized to use this command.")
+        return
+
+    response_html = cancel_calculator_session(user_id)
+    if update.effective_message:
+        await update.effective_message.reply_text(response_html, parse_mode="HTML")
+
+
+async def calculator_text_session_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Monitors text input for active Super Admin interactive calculator sessions.
+    Intercepts BEFORE and NOW numeric input steps and replies with calculation result.
+    """
+    message = update.effective_message
+    user = update.effective_user
+
+    if not message or not user:
+        return
+
+    if not is_super_admin(user.id):
+        return
+
+    if not has_active_calculator_session(user.id):
+        return
+
+    text_content = message.text or ""
+    if not text_content:
+        return
+
+    response_html = process_calculator_session_input(user.id, text_content)
+    await message.reply_text(response_html, parse_mode="HTML")
 
 
 # ==========================================
