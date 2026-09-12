@@ -14,6 +14,7 @@ and two-group reply-based DB operations.
 
 import unittest
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 from telegram import BotCommand
 
 from email_parser import extract_email, extract_order_id, extract_package, extract_last_email
@@ -22,7 +23,8 @@ from delivery import chunk_list
 from media_collector import user_session_manager
 from utils import is_super_admin, is_delivery_user
 from main import validate_bot_command
-from handlers import LOADER_ADD_SESSION, is_valid_price_string
+from calculator import safe_eval, parse_before_now, calculate_input
+from handlers import LOADER_ADD_SESSION, is_valid_price_string, source_group_handler, edited_message_handler, calc_command
 from database import (
     BOT_SETTINGS,
     AUTH_USERS_CACHE,
@@ -415,6 +417,133 @@ class TestTwoGroupDatabaseWorkflow(unittest.IsolatedAsyncioTestCase):
         # Clean up
         await delete_orders_by_email(email)
         await delete_orders_by_email("cancel_test@example.com")
+
+
+class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
+    """Tests for Super Admin Message Ignore and Super Admin Calculator features."""
+
+    def test_safe_eval_valid_math(self):
+        self.assertEqual(safe_eval("100+50"), 150)
+        self.assertEqual(safe_eval("100 * 5"), 500)
+        self.assertEqual(safe_eval("1000 / 4"), 250)
+        self.assertEqual(safe_eval("(100 + 50) * 2"), 300)
+        self.assertEqual(safe_eval("-50 + 100"), 50)
+        self.assertEqual(safe_eval("10.5 + 4.5"), 15)
+
+    def test_safe_eval_zero_division(self):
+        with self.assertRaises(ZeroDivisionError):
+            safe_eval("10 / 0")
+
+    def test_safe_eval_code_injection_security(self):
+        with self.assertRaises(ValueError):
+            safe_eval("__import__('os').system('ls')")
+        with self.assertRaises(ValueError):
+            safe_eval("eval('1+1')")
+        with self.assertRaises(ValueError):
+            safe_eval("import os")
+        with self.assertRaises(ValueError):
+            safe_eval("open('/etc/passwd')")
+        with self.assertRaises(ValueError):
+            safe_eval("'string_literal'")
+
+    def test_calculate_input_before_now_single(self):
+        res1 = calculate_input("before 100 now 150")
+        self.assertIn("Before:</b> 100", res1)
+        self.assertIn("Now:</b> 150", res1)
+        self.assertIn("Total:</b> +50", res1)
+
+        res2 = calculate_input("before 500 now 350")
+        self.assertIn("Before:</b> 500", res2)
+        self.assertIn("Now:</b> 350", res2)
+        self.assertIn("Total:</b> -150", res2)
+
+        res3 = calculate_input("before 1000 now 1000")
+        self.assertIn("Total:</b> 0", res3)
+
+    def test_calculate_input_flexible_formats(self):
+        res1 = calculate_input("Before: 100 Now: 150")
+        self.assertIn("Total:</b> +50", res1)
+        res2 = calculate_input("before=100 now=150")
+        self.assertIn("Total:</b> +50", res2)
+
+    def test_calculate_input_multiple_before_now(self):
+        res = calculate_input("before 100 now 150 before 500 now 350")
+        self.assertIn("1.</b>", res)
+        self.assertIn("Total:</b> +50", res)
+        self.assertIn("2.</b>", res)
+        self.assertIn("Total:</b> -150", res)
+        self.assertIn("Grand Total:</b> -100", res)
+
+    def test_calculate_input_direct_math(self):
+        res = calculate_input("100+200")
+        self.assertIn("Result:</b> 300", res)
+
+    def test_calculate_input_error_handling(self):
+        res_zero = calculate_input("10 / 0")
+        self.assertIn("Division by zero", res_zero)
+        res_invalid = calculate_input("import os")
+        self.assertIn("Invalid expression", res_invalid)
+
+    async def test_super_admin_normal_message_ignored(self):
+        await init_db()
+        await update_source_group(-1001111111111, "Client Group")
+        email = "sa_ignore_test@example.com"
+        await delete_orders_by_email(email)
+
+        update = MagicMock()
+        update.effective_chat.id = -1001111111111
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.message_id = 999
+        update.effective_message.text = f"10800 CP\nEmail: {email}"
+        context = MagicMock()
+
+        await source_group_handler(update, context)
+        order = await get_pending_order_by_email(email)
+        self.assertIsNone(order)  # Super Admin message must be ignored completely!
+
+    async def test_super_admin_edited_message_ignored(self):
+        update = MagicMock()
+        update.effective_chat.id = -1001111111111
+        update.effective_user.id = 8261988472  # Super Admin
+        update.edited_message.message_id = 999
+        update.edited_message.reply_text = AsyncMock()
+        context = MagicMock()
+
+        await edited_message_handler(update, context)
+        update.edited_message.reply_text.assert_not_called()
+
+    async def test_customer_order_detection_still_works(self):
+        await init_db()
+        await update_source_group(-1001111111111, "Client Group")
+        email = "cust_order_test@example.com"
+        await delete_orders_by_email(email)
+
+        update = MagicMock()
+        update.effective_chat.id = -1001111111111
+        update.effective_user.id = 999888777  # Normal Customer
+        update.effective_message.message_id = 888
+        update.effective_message.text = f"10800 CP\nEmail: {email}"
+        context = MagicMock()
+        context.bot.copy_message = AsyncMock()
+        context.bot.set_message_reaction = AsyncMock()
+
+        await source_group_handler(update, context)
+        order = await get_pending_order_by_email(email)
+        self.assertIsNotNone(order)
+        self.assertEqual(order.email, email)
+        await delete_orders_by_email(email)
+
+    async def test_non_super_admin_calc_rejected(self):
+        update = MagicMock()
+        update.effective_user.id = 999888777  # Non-admin
+        update.effective_message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = ["100+50"]
+
+        await calc_command(update, context)
+        update.effective_message.reply_text.assert_called_once()
+        called_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("not authorized", called_text)
 
 
 if __name__ == "__main__":

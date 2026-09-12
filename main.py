@@ -63,7 +63,8 @@ from handlers import (
     status_command,
     removesource_command,
     removedelivery_command,
-    resetgroups_command
+    resetgroups_command,
+    calc_command
 )
 
 # Initialize application logging
@@ -134,7 +135,8 @@ async def post_init(application: Application) -> None:
         BotCommand("status", "Bot Status"),
         BotCommand("pending", "Pending Orders"),
         BotCommand("find", "Find Order"),
-        BotCommand("stats", "Statistics")
+        BotCommand("stats", "Statistics"),
+        BotCommand("calc", "Calculator")
     ]
 
     valid_commands = []
@@ -218,6 +220,7 @@ def main() -> None:
     application.add_handler(CommandHandler("export", export_command))
     application.add_handler(CommandHandler("backup", backup_command))
     application.add_handler(CommandHandler("restore", restore_command))
+    application.add_handler(CommandHandler(["calc", "calculate"], calc_command))
 
     # Register Interactive Callback Query Handlers
     application.add_handler(CallbackQueryHandler(duplicate_order_callback_handler, pattern="^dup_"))

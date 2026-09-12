@@ -139,4 +139,5 @@ Only **3 environment variables** are required:
 - `/export` - Download CSV report export.
 - `/backup` - Download SQLite database backup file.
 - `/restore` - Restore SQLite database from attached `.db` file.
+- `/calc <expr_or_before_now>` / `/calculate` - Safe Super Admin calculator (e.g. `/calc 100+50` or `/calc before 100 now 150`).
 - `/resetgroups` - Clear group configurations in DB.

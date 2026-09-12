@@ -31,6 +31,7 @@ from keywords import contains_order_keyword
 from email_parser import extract_email, extract_order_id, extract_package, extract_last_email
 from media_collector import media_collector, user_session_manager
 from delivery import deliver_order_by_id, deliver_images_for_email
+from calculator import calculate_input
 from database import (
     BOT_SETTINGS,
     AUTH_USERS_CACHE,
@@ -118,6 +119,11 @@ async def source_group_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
 
     if not message or not chat:
+        return
+
+    # Super Admin Ignore: Completely ignore any normal message sent by a Super Admin in Client Group
+    if user and is_super_admin(user.id):
+        logger.info(f"[CLIENT] Ignored message {message.message_id} from Super Admin ({user.id}) in Client Group.")
         return
 
     # Check against in-memory BOT_SETTINGS and CLIENT_GROUPS_CACHE (Zero DB SELECT query)
@@ -284,6 +290,11 @@ async def edited_message_handler(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
 
     if not message or not chat:
+        return
+
+    # Super Admin Ignore: Completely ignore edited messages from Super Admins
+    if user and is_super_admin(user.id):
+        logger.info(f"[CLIENT] Ignored edited message {message.message_id} from Super Admin ({user.id}) in Client Group.")
         return
 
     is_client_group = (chat.id == BOT_SETTINGS["source_group_id"]) or (chat.id in CLIENT_GROUPS_CACHE)
@@ -1396,6 +1407,26 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         lines.append("None")
 
     await update.effective_message.reply_text("\n".join(lines))
+
+
+async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles /calc and /calculate commands for Super Admins.
+    Evaluates arithmetic expressions or Before/Now accounting calculations securely.
+    """
+    if not await check_admin_permission(update):
+        return
+
+    raw_args = " ".join(context.args) if context.args else ""
+    if not raw_args and update.effective_message and update.effective_message.text:
+        text = update.effective_message.text.strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) > 1:
+            raw_args = parts[1]
+
+    response_html = calculate_input(raw_args)
+    if update.effective_message:
+        await update.effective_message.reply_text(response_html, parse_mode="HTML")
 
 
 # ==========================================
