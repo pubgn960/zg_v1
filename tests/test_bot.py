@@ -92,7 +92,8 @@ from database import (
     add_to_group_total,
     paid_group_total,
     undo_group_total,
-    get_all_group_totals_chat_ids
+    get_all_group_totals_chat_ids,
+    get_broadcast_target_chat_ids
 )
 
 
@@ -1106,5 +1107,66 @@ class TestRealCustomerOrderDetection(unittest.TestCase):
         self.assertEqual(res3["package"], "2400+880")
 
 
+class TestBroadcastFunctionality(unittest.IsolatedAsyncioTestCase):
+    """Tests /broadcast command logic, ensuring Client Groups receive and Loader Groups/Overlap Groups are strictly excluded."""
+
+    async def asyncSetUp(self):
+        await init_db()
+        CLIENT_GROUPS_CACHE.clear()
+        LOADERS_CACHE.clear()
+
+    async def asyncTearDown(self):
+        CLIENT_GROUPS_CACHE.clear()
+        LOADERS_CACHE.clear()
+
+    async def test_get_broadcast_target_chat_ids_filtering(self):
+        # Configure Client Group A & B
+        await set_client_group_category(-100111, "Client A", "A")
+        await set_client_group_category(-100222, "Client B", "B")
+
+        # Configure Overlap Group in ClientGroup table
+        await set_client_group_category(-100999, "Overlap Group", "A")
+
+        # Configure Loader Group A & B and Overlap Group in Loader table
+        await add_loader(-100333, "Loader A")
+        await add_loader(-100444, "Loader B")
+        await add_loader(-100999, "Overlap Loader")
+
+        targets = await get_broadcast_target_chat_ids()
+
+        self.assertIn(-100111, targets)
+        self.assertIn(-100222, targets)
+        self.assertNotIn(-100333, targets)
+        self.assertNotIn(-100444, targets)
+        self.assertNotIn(-100999, targets)
+
+    async def test_broadcast_command_execution(self):
+        await set_client_group_category(-100111, "Client A", "A")
+        await set_client_group_category(-100222, "Client B", "B")
+        await add_loader(-100333, "Loader A")
+        await add_loader(-100999, "Overlap Loader")
+        await set_client_group_category(-100999, "Overlap Group", "A")
+
+        update = MagicMock()
+        update.effective_user.id = 999999
+        update.effective_message.reply_to_message = None
+        update.effective_message.reply_text = AsyncMock()
+
+        context = MagicMock()
+        context.args = ["Test", "Broadcast", "Message"]
+        context.bot.send_message = AsyncMock()
+
+        with unittest.mock.patch("handlers.is_super_admin", return_value=True):
+            await broadcast_command(update, context)
+
+        sent_chat_ids = [call.kwargs.get("chat_id") for call in context.bot.send_message.call_args_list]
+
+        self.assertIn(-100111, sent_chat_ids)
+        self.assertIn(-100222, sent_chat_ids)
+        self.assertNotIn(-100333, sent_chat_ids)
+        self.assertNotIn(-100999, sent_chat_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
+

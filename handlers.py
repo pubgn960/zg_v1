@@ -19,6 +19,7 @@ import sys
 import html
 import shutil
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Dict, Any
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -82,7 +83,8 @@ from database import (
     add_to_group_total,
     paid_group_total,
     undo_group_total,
-    get_all_group_totals_chat_ids
+    get_all_group_totals_chat_ids,
+    get_broadcast_target_chat_ids
 )
 from models import Order
 from utils import (
@@ -1707,9 +1709,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not message:
         return
 
-    calc_chats = await get_all_group_totals_chat_ids()
-    client_chats = list(CLIENT_GROUPS_CACHE.keys())
-    all_target_chats = list(set(calc_chats + client_chats))
+    all_target_chats = await get_broadcast_target_chat_ids()
 
     if not all_target_chats:
         await message.reply_text("⚠️ No active target groups registered for broadcast.")

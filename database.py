@@ -495,6 +495,59 @@ async def get_client_group_category(chat_id: int) -> str:
     return "A"
 
 
+async def get_broadcast_target_chat_ids() -> List[int]:
+    """
+    Retrieves all configured Client Group IDs from database and cache,
+    strictly EXCLUDING any registered Loader Group IDs (loaders table, delivery_group_id, LOADERS_CACHE).
+    Formula: target_chat_ids = client_group_ids MINUS loader_group_ids.
+    """
+    client_ids: Set[int] = set()
+    loader_ids: Set[int] = set()
+
+    async with AsyncSessionLocal() as session:
+        # Fetch configured Client Group IDs from ClientGroup table
+        stmt_cg = select(ClientGroup.chat_id)
+        res_cg = await session.execute(stmt_cg)
+        for row in res_cg.scalars().all():
+            if row:
+                client_ids.add(int(row))
+
+        # Fetch source_group_id & delivery_group_id from Settings table
+        stmt_st = select(Settings).where(Settings.id == 1)
+        res_st = await session.execute(stmt_st)
+        settings = res_st.scalar_one_or_none()
+        if settings:
+            if settings.source_group_id:
+                client_ids.add(int(settings.source_group_id))
+            if settings.delivery_group_id:
+                loader_ids.add(int(settings.delivery_group_id))
+
+        # Fetch configured Loader Group IDs from Loader table
+        stmt_ld = select(Loader.group_id)
+        res_ld = await session.execute(stmt_ld)
+        for row in res_ld.scalars().all():
+            if row:
+                loader_ids.add(int(row))
+
+    # Include in-memory cache IDs to ensure full sync
+    for cid in CLIENT_GROUPS_CACHE.keys():
+        if cid:
+            client_ids.add(int(cid))
+    if BOT_SETTINGS.get("source_group_id"):
+        client_ids.add(int(BOT_SETTINGS["source_group_id"]))
+
+    for l_info in LOADERS_CACHE.values():
+        gid = l_info.get("group_id")
+        if gid:
+            loader_ids.add(int(gid))
+    if BOT_SETTINGS.get("delivery_group_id"):
+        loader_ids.add(int(BOT_SETTINGS["delivery_group_id"]))
+
+    # Strictly exclude any Loader Group ID from broadcast targets
+    final_targets = [cid for cid in client_ids if cid not in loader_ids]
+    return sorted(final_targets)
+
+
 async def update_order_status(order_id: int, status: str) -> Optional[Order]:
     """Updates status for an Order by ID."""
     async with AsyncSessionLocal() as session:
