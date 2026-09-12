@@ -1414,7 +1414,13 @@ async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     Handles /calc and /calculate commands for Super Admins.
     Evaluates arithmetic expressions or Before/Now accounting calculations securely.
     """
-    if not await check_admin_permission(update):
+    user = update.effective_user
+    user_id = user.id if user else None
+
+    if not is_super_admin(user_id):
+        logger.warning(f"Unauthorized calculator command access attempt by user_id: {user_id}")
+        if update.effective_message:
+            await update.effective_message.reply_text("⛔ You are not authorized to use this command.")
         return
 
     raw_args = " ".join(context.args) if context.args else ""

@@ -545,6 +545,18 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         called_text = update.effective_message.reply_text.call_args[0][0]
         self.assertIn("not authorized", called_text)
 
+    async def test_super_admin_calculate_command(self):
+        update = MagicMock()
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = ["before", "100", "now", "150"]
+
+        await calc_command(update, context)
+        update.effective_message.reply_text.assert_called_once()
+        called_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Total:</b> +50", called_text)
+
 
 if __name__ == "__main__":
     unittest.main()
