@@ -1030,7 +1030,7 @@ async def delivery_group_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def loaderadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Handles /loaderadd command. Supports direct arguments (/loaderadd <group_id> <name>)
+    Handles /loaderadd command. Supports direct arguments (/loaderadd <group_id> [loader_name])
     or step-by-step interactive wizard (/loaderadd -> Ask Group ID -> Ask Loader Name).
     """
     if not await check_admin_permission(update):
@@ -1041,12 +1041,48 @@ async def loaderadd_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     uid = user.id if user else None
     args = context.args or []
 
-    if len(args) >= 2 and args[0].lstrip("-").isdigit():
-        group_id = int(args[0])
-        loader_name = " ".join(args[1:])
+    if args:
+        # Search for numeric group chat ID in args (can start with '-' or digits)
+        chat_id_arg = None
+        remaining_args = []
+        for arg in args:
+            clean_arg = arg.strip()
+            if not chat_id_arg and re.match(r'^-?\d+$', clean_arg):
+                chat_id_arg = clean_arg
+            else:
+                remaining_args.append(arg)
+
+        if not chat_id_arg:
+            await update.effective_message.reply_text(
+                "❌ Invalid Chat ID. Telegram Group Chat IDs must be numbers (e.g. -1003988988788)."
+            )
+            return
+
+        group_id = int(chat_id_arg)
+        loader_name = " ".join(remaining_args).strip() or "Loader Group"
+
+        # Check duplicate loader group ID
+        if not LOADERS_CACHE:
+            await reload_loaders_cache()
+
+        if any(l["group_id"] == group_id for l in LOADERS_CACHE.values()):
+            await update.effective_message.reply_text("⚠️ Loader Group already exists.")
+            return
+
         await add_loader(group_id, loader_name)
-        LOADER_ADD_SESSION.pop(uid, None)
-        await update.effective_message.reply_text("✅ Loader Added Successfully")
+        await reload_loaders_cache()
+
+        if uid:
+            LOADER_ADD_SESSION.pop(uid, None)
+
+        msg_text = (
+            f"✅ <b>Loader Group added successfully.</b>\n\n"
+            f"<b>Loader Group ID:</b>\n<code>{group_id}</code>"
+        )
+        if loader_name != "Loader Group":
+            msg_text += f"\n<b>Name:</b> {html.escape(loader_name)}"
+
+        await update.effective_message.reply_text(msg_text, parse_mode="HTML")
         return
 
     # Interactive Step-by-Step wizard reserved strictly for this admin user
@@ -1069,27 +1105,28 @@ async def loader_text_wizard_handler(update: Update, context: ContextTypes.DEFAU
     message = update.effective_message
     chat = update.effective_chat
 
-    # Rule 1 & 2: Immediately return without replying or consuming if no active session exists for user
+    # Immediately return without replying or consuming if no active session exists for user
     if not user or not message or user.id not in LOADER_ADD_SESSION:
         return
 
     session = LOADER_ADD_SESSION[user.id]
 
-    # Rule 5: Match initiating chat context
+    # Match initiating chat context
     if chat and session.get("chat_id") and chat.id != session.get("chat_id"):
         return
 
     text = (message.text or "").strip()
 
-    # Rule 4: Cancel wizard if admin issues a command or cancels
+    # Cancel wizard if admin issues a command or cancels
     if text.startswith("/") or text.lower() in ("cancel", "exit"):
         LOADER_ADD_SESSION.pop(user.id, None)
         logger.info(f"[LOADER_MGMT] Cancelled /loaderadd wizard for user {user.id}.")
         if text.lower() in ("cancel", "exit"):
             await message.reply_text("❌ Loader add wizard cancelled.")
+            raise ApplicationHandlerStop()
         return
 
-    # Rule 4: Timeout session after 5 minutes (300 seconds)
+    # Timeout session after 5 minutes (300 seconds)
     created_at = session.get("created_at")
     if created_at and (datetime.now(timezone.utc) - created_at).total_seconds() > 300:
         LOADER_ADD_SESSION.pop(user.id, None)
@@ -1099,14 +1136,26 @@ async def loader_text_wizard_handler(update: Update, context: ContextTypes.DEFAU
     step = session.get("step", 1)
 
     if step == 1:
-        if not text.lstrip("-").isdigit():
+        clean_id_str = text.strip()
+        if not re.match(r'^-?\d+$', clean_id_str):
             await message.reply_text("❌ Invalid Loader Group ID. Must be numeric (e.g. -1001234567890).")
-            return
+            raise ApplicationHandlerStop()
 
-        session["group_id"] = int(text)
+        group_id = int(clean_id_str)
+
+        # Check duplicate loader group ID
+        if not LOADERS_CACHE:
+            await reload_loaders_cache()
+
+        if any(l["group_id"] == group_id for l in LOADERS_CACHE.values()):
+            await message.reply_text("⚠️ Loader Group already exists.")
+            LOADER_ADD_SESSION.pop(user.id, None)
+            raise ApplicationHandlerStop()
+
+        session["group_id"] = group_id
         session["step"] = 2
         await message.reply_text("Send Loader Name")
-        return
+        raise ApplicationHandlerStop()
 
     elif step == 2:
         group_id = session.get("group_id")
@@ -1115,17 +1164,23 @@ async def loader_text_wizard_handler(update: Update, context: ContextTypes.DEFAU
         if not group_id or not loader_name:
             await message.reply_text("❌ Error adding loader. Please try again with /loaderadd.")
             LOADER_ADD_SESSION.pop(user.id, None)
-            return
+            raise ApplicationHandlerStop()
 
         try:
             await add_loader(group_id, loader_name)
-            await message.reply_text("✅ Loader Added Successfully")
+            await reload_loaders_cache()
+            msg_text = (
+                f"✅ <b>Loader Group added successfully.</b>\n\n"
+                f"<b>Loader Group ID:</b>\n<code>{group_id}</code>\n"
+                f"<b>Name:</b> {html.escape(loader_name)}"
+            )
+            await message.reply_text(msg_text, parse_mode="HTML")
         except Exception as e:
             logger.exception(f"[LOADER_MGMT] Failed to add loader: {e}")
             await message.reply_text(f"❌ Failed to add loader: {e}")
         finally:
-            # Rule 4: Completely remove wizard state after completion
             LOADER_ADD_SESSION.pop(user.id, None)
+            raise ApplicationHandlerStop()
 
 
 async def loaderlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -242,14 +242,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(category_b_approval_callback_handler, pattern="^catb_"))
     application.add_handler(CallbackQueryHandler(price_callback_handler, pattern="^price_"))
 
-    # Register text wizard and calculator handlers in group 0
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & (~filters.COMMAND),
-            calculator_text_handler
-        ),
-        group=0
-    )
+    # Register text wizard, price input, and calculator handlers in group 0
     application.add_handler(
         MessageHandler(
             filters.TEXT & (~filters.COMMAND),
@@ -261,6 +254,13 @@ def main() -> None:
         MessageHandler(
             filters.TEXT & (~filters.COMMAND),
             price_input_text_handler
+        ),
+        group=0
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & (~filters.COMMAND),
+            calculator_text_handler
         ),
         group=0
     )

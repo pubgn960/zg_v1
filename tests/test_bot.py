@@ -14,6 +14,7 @@ and two-group reply-based DB operations.
 
 import unittest
 import asyncio
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from telegram import BotCommand
 from telegram.ext import ApplicationHandlerStop
@@ -36,6 +37,8 @@ from handlers import (
     is_valid_price_string,
     source_group_handler,
     edited_message_handler,
+    loaderadd_command,
+    loader_text_wizard_handler,
     calc_command,
     calccancel_command,
     calculator_text_handler,
@@ -172,7 +175,7 @@ class TestBotCommandValidation(unittest.TestCase):
 
 
 class TestMultiLoaderManagement(unittest.IsolatedAsyncioTestCase):
-    """Tests Loader CRUD operations, cache synchronization, and multi-loader assignment."""
+    """Tests Loader CRUD operations, cache synchronization, /loaderadd command arguments, validation, and wizard state isolation."""
 
     async def test_loader_crud_and_cache(self):
         await init_db()
@@ -200,6 +203,87 @@ class TestMultiLoaderManagement(unittest.IsolatedAsyncioTestCase):
 
         # Clean up
         await remove_loader_by_id(l2.id)
+
+    async def test_loaderadd_direct_command_and_validation(self):
+        await init_db()
+        super_admin_id = 8261988472
+
+        # 1. Test direct command: /loaderadd -1003988988788
+        update = MagicMock()
+        update.effective_user.id = super_admin_id
+        update.effective_chat.id = -1003988988788
+        update.effective_message.reply_text = AsyncMock()
+
+        context = MagicMock()
+        context.args = ["-1003988988788"]
+
+        await loaderadd_command(update, context)
+
+        reply_args = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Loader Group added successfully", reply_args)
+        self.assertIn("-1003988988788", reply_args)
+
+        # Verify cached
+        self.assertTrue(any(l["group_id"] == -1003988988788 for l in LOADERS_CACHE.values()))
+
+        # 2. Test duplicate prevention: /loaderadd -1003988988788 again
+        update_dup = MagicMock()
+        update_dup.effective_user.id = super_admin_id
+        update_dup.effective_message.reply_text = AsyncMock()
+
+        context_dup = MagicMock()
+        context_dup.args = ["-1003988988788"]
+
+        await loaderadd_command(update_dup, context_dup)
+        reply_dup = update_dup.effective_message.reply_text.call_args[0][0]
+        self.assertIn("already exists", reply_dup)
+
+        # 3. Test invalid argument rejection: /loaderadd 123abc
+        update_invalid = MagicMock()
+        update_invalid.effective_user.id = super_admin_id
+        update_invalid.effective_message.reply_text = AsyncMock()
+
+        context_invalid = MagicMock()
+        context_invalid.args = ["123abc"]
+
+        await loaderadd_command(update_invalid, context_invalid)
+        reply_invalid = update_invalid.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Invalid Chat ID", reply_invalid)
+
+        # Cleanup created loader
+        loaders = await get_all_loaders()
+        for l in loaders:
+            if l.group_id == -1003988988788:
+                await remove_loader_by_id(l.id)
+
+    async def test_loaderadd_wizard_interception_over_calculator(self):
+        await init_db()
+        super_admin_id = 8261988472
+        LOADER_ADD_SESSION.clear()
+
+        # Step 1: User is in active /loaderadd session
+        LOADER_ADD_SESSION[super_admin_id] = {
+            "step": 1,
+            "chat_id": -100999,
+            "created_at": datetime.now(timezone.utc)
+        }
+
+        update = MagicMock()
+        update.effective_user.id = super_admin_id
+        update.effective_chat.id = -100999
+        update.effective_message.text = "-1003988988799"
+        update.effective_message.reply_text = AsyncMock()
+
+        # Call loader_text_wizard_handler - must raise ApplicationHandlerStop and NOT trigger calculator
+        with self.assertRaises(ApplicationHandlerStop):
+            await loader_text_wizard_handler(update, MagicMock())
+
+        reply_wizard = update.effective_message.reply_text.call_args[0][0]
+        self.assertEqual(reply_wizard, "Send Loader Name")
+        self.assertEqual(LOADER_ADD_SESSION[super_admin_id]["step"], 2)
+        self.assertEqual(LOADER_ADD_SESSION[super_admin_id]["group_id"], -1003988988799)
+
+        LOADER_ADD_SESSION.clear()
 
 
 class TestGroupCategoryRouting(unittest.IsolatedAsyncioTestCase):
