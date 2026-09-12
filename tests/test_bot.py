@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 from telegram import BotCommand
 from telegram.ext import ApplicationHandlerStop
 
+from order_parser import parse_order_v2
 from email_parser import extract_email, extract_order_id, extract_package, extract_last_email
 from keywords import contains_order_keyword
 from delivery import chunk_list
@@ -332,21 +333,21 @@ class TestBotSettingsCache(unittest.IsolatedAsyncioTestCase):
 
 
 class TestKeywordDetector(unittest.TestCase):
-    """Tests keyword-based order detection."""
+    """Tests strict 4-condition order detection integration in keywords.py."""
 
     def test_keyword_matches(self):
-        # Match cases
-        self.assertTrue(contains_order_keyword("10800 CP\nabc@gmail.com")[0])
-        self.assertTrue(contains_order_keyword("Login:\ntest@hotmail.com")[0])
-        self.assertTrue(contains_order_keyword("UID:\n123456\nEmail:\nabc@outlook.com")[0])
-        self.assertTrue(contains_order_keyword("Login: test+1234")[0])
-        self.assertTrue(contains_order_keyword("myemail@yahoo.co.pk")[0])
+        # Match cases (Platform + Email + Password + Package)
+        self.assertTrue(contains_order_keyword("Facebook\nEmail: abc@gmail.com\nPassword: 123456\n10800 CP")[0])
+        self.assertTrue(contains_order_keyword("FB\nLogin: test@hotmail.com\nPass: 123\n420")[0])
+        self.assertTrue(contains_order_keyword("Activision\nEmail: abc@outlook.com\nPassword: pass123\n2400 CP")[0])
 
     def test_keyword_ignores(self):
-        # Ignore cases
+        # Ignore cases (Incomplete messages missing 1 or more conditions)
+        self.assertFalse(contains_order_keyword("10800 CP\nabc@gmail.com")[0])
         self.assertFalse(contains_order_keyword("Need CP")[0])
         self.assertFalse(contains_order_keyword("Hello")[0])
         self.assertFalse(contains_order_keyword("10800 CP")[0])
+        self.assertFalse(contains_order_keyword("Facebook")[0])
 
 
 class TestEmailOrderPackageParser(unittest.TestCase):
@@ -657,7 +658,7 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         update.effective_chat.id = -1001111111111
         update.effective_user.id = 999888777  # Normal Customer
         update.effective_message.message_id = 888
-        update.effective_message.text = f"10800 CP\nEmail: {email}"
+        update.effective_message.text = f"Facebook\nEmail: {email}\nPassword: 123456\n10800 CP"
         context = MagicMock()
         context.bot.copy_message = AsyncMock()
         context.bot.set_message_reaction = AsyncMock()
@@ -695,6 +696,85 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
 
         b3, n3, t3 = await add_to_group_total(chat_id, 30.4)
         self.assertEqual((b3, n3, t3), (150.0, 30.4, 180.4))
+
+
+class TestStrict4ConditionOrderDetection(unittest.TestCase):
+    """Tests all combinations of the strict 4-condition order detection system."""
+
+    def test_full_four_conditions_detected(self):
+        # Platform + Email + Password + Package -> TRUE
+        msg1 = "Facebook\nEmail: customer@gmail.com\nPassword: 123456\n10800 CP"
+        res1 = parse_order_v2(msg1)
+        self.assertTrue(res1["order_detected"])
+        self.assertEqual(res1["email"], "customer@gmail.com")
+        self.assertEqual(res1["platform"], "Facebook")
+
+        msg2 = "FB\ncorreo: customer@hotmail.com\npass: abc123\n420"
+        res2 = parse_order_v2(msg2)
+        self.assertTrue(res2["order_detected"])
+
+        msg3 = "Activision\nemail: customer@gmail.com\nlogin: abc123\n2400 CP"
+        res3 = parse_order_v2(msg3)
+        self.assertTrue(res3["order_detected"])
+
+        msg4 = "Meta\ncorreo o numero: user@gmail.com\nclave: pass123\n880 CP"
+        res4 = parse_order_v2(msg4)
+        self.assertTrue(res4["order_detected"])
+
+        msg5 = "Activision ID\nemail: user@outlook.com\n2fa: 123456\n10k"
+        res5 = parse_order_v2(msg5)
+        self.assertTrue(res5["order_detected"])
+
+    def test_missing_conditions_rejected(self):
+        # Platform + Email + Package -> FALSE (Missing password/credentials)
+        msg_no_pass = "Facebook\nEmail: customer@gmail.com\n10800 CP"
+        res_no_pass = parse_order_v2(msg_no_pass)
+        self.assertFalse(res_no_pass["order_detected"])
+        self.assertIn("Missing password", res_no_pass["reason"])
+
+        # Platform + Password + Package -> FALSE (Missing email/login info)
+        msg_no_email = "Facebook\nPassword: 123456\n10800 CP"
+        res_no_email = parse_order_v2(msg_no_email)
+        self.assertFalse(res_no_email["order_detected"])
+        self.assertIn("Missing email", res_no_email["reason"])
+
+        # Email + Password + Package -> FALSE (Missing platform)
+        msg_no_plat = "Email: customer@gmail.com\nPassword: 123456\n10800 CP"
+        res_no_plat = parse_order_v2(msg_no_plat)
+        self.assertFalse(res_no_plat["order_detected"])
+        self.assertIn("Missing platform", res_no_plat["reason"])
+
+        # Platform + Email + Password -> FALSE (Missing package)
+        msg_no_pkg = "Facebook\nEmail: customer@gmail.com\nPassword: 123456"
+        res_no_pkg = parse_order_v2(msg_no_pkg)
+        self.assertFalse(res_no_pkg["order_detected"])
+        self.assertIn("Missing package", res_no_pkg["reason"])
+
+    def test_false_positive_cases_rejected(self):
+        false_positives = [
+            "hello",
+            "Facebook",
+            "test@gmail.com",
+            "Facebook test@gmail.com",
+            "10800 CP",
+            "password 123456",
+            "420",
+            "price?",
+            "how much?",
+            "100+50",
+            "before 100 now 150"
+        ]
+        for msg in false_positives:
+            res = parse_order_v2(msg)
+            self.assertFalse(res["order_detected"], f"Failed false positive test for message: '{msg}'")
+
+    def test_platform_variants(self):
+        platforms = ["Facebook", "FB", "Meta", "Activision", "Activision ID", "facebook", "fb", "meta", "activision"]
+        for plat in platforms:
+            text = f"{plat}\nEmail: user@gmail.com\nPassword: pass123\n420 CP"
+            res = parse_order_v2(text)
+            self.assertTrue(res["order_detected"], f"Platform variant failed for '{plat}'")
+            self.assertTrue(res["platform_detected"])
 
 
 if __name__ == "__main__":

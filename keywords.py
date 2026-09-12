@@ -1,51 +1,25 @@
 """
 Order Detection Keywords Configuration.
-Contains dedicated keyword definitions for detecting customer orders in Client Group messages,
-photo captions, and document captions.
+Delegates order detection to parse_order_v2 (single source of truth).
 """
 
-from typing import List, Tuple, Optional
-
-# Dedicated order detection keywords (case-insensitive)
-ORDER_KEYWORDS: List[str] = [
-    ".com",
-    ".co",
-    ".net",
-    ".org",
-    ".pk",
-    ".io",
-    ".gg",
-    "gmail",
-    "gma",
-    "hotmail",
-    "hotmail.com",
-    "outlook",
-    "outlook.com",
-    "yahoo",
-    "icloud",
-    "proton",
-    "+",
-    "email"
-]
+from typing import Tuple, Optional
+from order_parser import parse_order_v2
 
 
 def contains_order_keyword(text: Optional[str]) -> Tuple[bool, Optional[str]]:
     """
-    Checks if a given message text or caption contains at least one order keyword.
-    Matching is case-insensitive.
+    Evaluates customer message text or caption against strict 4-condition order detection system.
 
     Args:
         text (Optional[str]): Message text, photo caption, or document caption.
 
     Returns:
-        Tuple[bool, Optional[str]]: (is_matched, matched_keyword)
+        Tuple[bool, Optional[str]]: (is_matched, matched_detail)
     """
-    if not text:
-        return False, None
-
-    text_lower = text.lower()
-    for kw in ORDER_KEYWORDS:
-        if kw.lower() in text_lower:
-            return True, kw
+    decision = parse_order_v2(text)
+    if decision["order_detected"]:
+        kw = decision["platform"] or decision["package"] or "order"
+        return True, kw
 
     return False, None

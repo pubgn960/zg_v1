@@ -98,13 +98,13 @@ def extract_order_id(text: Optional[str]) -> Optional[int]:
 
 def extract_package(text: Optional[str]) -> str:
     """
-    Extracts package/item description from customer message by stripping email line.
+    Extracts package/item description from customer message by stripping email, password, and credential lines.
 
     Args:
         text (str, optional): Input order message text.
 
     Returns:
-        str: Package text description or default fallback.
+        str: Clean package text description or default fallback.
     """
     if not text:
         return "Standard Package"
@@ -114,6 +114,9 @@ def extract_package(text: Optional[str]) -> str:
 
     for line in lines:
         if EMAIL_REGEX.search(line):
+            continue
+        # Exclude lines containing passwords, logins, or platforms
+        if re.search(r'\b(password|pass|pwd|login|contrase[nñ]a|clave|2fa|recovery|facebook|fb|meta|activision)\b', line, re.IGNORECASE):
             continue
         if line.lower().startswith(("package:", "item:", "order:")):
             package_lines.append(line.split(":", 1)[-1].strip())

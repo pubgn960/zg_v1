@@ -27,6 +27,7 @@ from telegram.error import TelegramError
 from sqlalchemy import update as update_sql, select
 
 from config import Config
+from order_parser import parse_order_v2
 from keywords import contains_order_keyword
 from email_parser import extract_email, extract_order_id, extract_package, extract_last_email
 from media_collector import media_collector, user_session_manager
@@ -147,16 +148,16 @@ async def source_group_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.debug(f"[CLIENT] Message {message.message_id} in Client Group has no text/caption content.")
         return
 
-    # Keyword-Based Order Detection
-    matched, keyword = contains_order_keyword(text_content)
-    if not matched:
-        logger.info("[DETECTOR] No keyword found. Message ignored.")
+    # Strict 4-Condition Order Detection
+    decision = parse_order_v2(text_content)
+    if not decision["order_detected"]:
+        logger.info(f"[DETECTOR] Order detection negative. Reason: {decision['reason']}. Message ignored.")
         return
 
-    logger.info(f"[DETECTOR] Keyword matched: {keyword}")
+    logger.info(f"[DETECTOR] Strict Order detected! Platform: {decision['platform']}, Email: {decision['email']}, Package: {decision['package']}")
 
-    email = extract_email(text_content) or f"order_{message.message_id}@customer.com"
-    package_desc = extract_package(text_content)
+    email = decision["email"] or extract_email(text_content) or f"order_{message.message_id}@customer.com"
+    package_desc = decision["package"] or extract_package(text_content)
 
     # Determine Group Category ('A' or 'B')
     category = CLIENT_GROUPS_CACHE.get(chat.id, "A")
