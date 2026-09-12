@@ -208,19 +208,19 @@ class TestMultiLoaderManagement(unittest.IsolatedAsyncioTestCase):
         await init_db()
         super_admin_id = 8261988472
 
-        # 1. Test direct command: /loaderadd -1003988988788
+        # 1. Test direct command with ID and Name: /loaderadd -1003988988788 Direct Loader 1
         update = MagicMock()
         update.effective_user.id = super_admin_id
         update.effective_chat.id = -1003988988788
         update.effective_message.reply_text = AsyncMock()
 
         context = MagicMock()
-        context.args = ["-1003988988788"]
+        context.args = ["-1003988988788", "Direct", "Loader", "1"]
 
         await loaderadd_command(update, context)
 
         reply_args = update.effective_message.reply_text.call_args[0][0]
-        self.assertIn("Loader Group added successfully", reply_args)
+        self.assertIn("Loader Added Successfully", reply_args)
         self.assertIn("-1003988988788", reply_args)
 
         # Verify cached
@@ -248,7 +248,7 @@ class TestMultiLoaderManagement(unittest.IsolatedAsyncioTestCase):
 
         await loaderadd_command(update_invalid, context_invalid)
         reply_invalid = update_invalid.effective_message.reply_text.call_args[0][0]
-        self.assertIn("Invalid Chat ID", reply_invalid)
+        self.assertIn("Invalid Loader Group ID", reply_invalid)
 
         # Cleanup created loader
         loaders = await get_all_loaders()
@@ -261,9 +261,9 @@ class TestMultiLoaderManagement(unittest.IsolatedAsyncioTestCase):
         super_admin_id = 8261988472
         LOADER_ADD_SESSION.clear()
 
-        # Step 1: User is in active /loaderadd session
+        # Step 1: User is in active /loaderadd session for -1003988988799
         LOADER_ADD_SESSION[super_admin_id] = {
-            "step": 1,
+            "group_id": -1003988988799,
             "chat_id": -100999,
             "created_at": datetime.now(timezone.utc)
         }
@@ -271,7 +271,7 @@ class TestMultiLoaderManagement(unittest.IsolatedAsyncioTestCase):
         update = MagicMock()
         update.effective_user.id = super_admin_id
         update.effective_chat.id = -100999
-        update.effective_message.text = "-1003988988799"
+        update.effective_message.text = "Zohan Loader 77"
         update.effective_message.reply_text = AsyncMock()
 
         # Call loader_text_wizard_handler - must raise ApplicationHandlerStop and NOT trigger calculator
@@ -279,9 +279,9 @@ class TestMultiLoaderManagement(unittest.IsolatedAsyncioTestCase):
             await loader_text_wizard_handler(update, MagicMock())
 
         reply_wizard = update.effective_message.reply_text.call_args[0][0]
-        self.assertEqual(reply_wizard, "Send Loader Name")
-        self.assertEqual(LOADER_ADD_SESSION[super_admin_id]["step"], 2)
-        self.assertEqual(LOADER_ADD_SESSION[super_admin_id]["group_id"], -1003988988799)
+        self.assertIn("Loader Added Successfully", reply_wizard)
+        self.assertIn("Zohan Loader 77", reply_wizard)
+        self.assertNotIn(super_admin_id, LOADER_ADD_SESSION)
 
         LOADER_ADD_SESSION.clear()
 
@@ -780,6 +780,176 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
 
         b3, n3, t3 = await add_to_group_total(chat_id, 30.4)
         self.assertEqual((b3, n3, t3), (150.0, 30.4, 180.4))
+
+    async def test_loaderadd_missing_args_rejected(self):
+        update = MagicMock()
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = []
+
+        await loaderadd_command(update, context)
+        reply = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Usage:", reply)
+
+    async def test_loaderadd_invalid_group_id_rejected(self):
+        # Non-numeric ID
+        update1 = MagicMock()
+        update1.effective_user.id = 8261988472
+        update1.effective_message.reply_text = AsyncMock()
+        context1 = MagicMock()
+        context1.args = ["abc"]
+
+        await loaderadd_command(update1, context1)
+        reply1 = update1.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Invalid Loader Group ID", reply1)
+
+        # Positive ID (must be negative for Telegram group chat IDs)
+        update2 = MagicMock()
+        update2.effective_user.id = 8261988472
+        update2.effective_message.reply_text = AsyncMock()
+        context2 = MagicMock()
+        context2.args = ["12345"]
+
+        await loaderadd_command(update2, context2)
+        reply2 = update2.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Invalid Loader Group ID", reply2)
+
+    async def test_loaderadd_valid_id_asks_for_name_and_saves(self):
+        admin_uid = 8261988472
+        group_id = -1003464814888
+
+        # Ensure clean initial state for this group_id
+        loaders = await get_all_loaders()
+        for l in loaders:
+            if l.group_id == group_id:
+                await remove_loader_by_id(l.id)
+        await reload_loaders_cache()
+
+        # Step 1: /loaderadd -1003464814888
+        update1 = MagicMock()
+        update1.effective_user.id = admin_uid
+        update1.effective_chat.id = -100111222
+        update1.effective_message.reply_text = AsyncMock()
+        context1 = MagicMock()
+        context1.args = [str(group_id)]
+
+        await loaderadd_command(update1, context1)
+        reply1 = update1.effective_message.reply_text.call_args[0][0]
+        self.assertEqual(reply1, "Name:")
+        self.assertIn(admin_uid, LOADER_ADD_SESSION)
+        self.assertEqual(LOADER_ADD_SESSION[admin_uid]["group_id"], group_id)
+
+        # Step 2: Admin sends "Zohan Loader 1"
+        update2 = MagicMock()
+        update2.effective_user.id = admin_uid
+        update2.effective_chat.id = -100111222
+        update2.effective_message.text = "Zohan Loader 1"
+        update2.effective_message.reply_text = AsyncMock()
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await loader_text_wizard_handler(update2, MagicMock())
+
+        reply2 = update2.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Loader Added Successfully", reply2)
+        self.assertIn("Zohan Loader 1", reply2)
+        self.assertIn(str(group_id), reply2)
+        self.assertNotIn(admin_uid, LOADER_ADD_SESSION)
+
+        # Verify DB persistence
+        loaders = await get_all_loaders()
+        added = next((l for l in loaders if l.group_id == group_id), None)
+        self.assertIsNotNone(added)
+        self.assertEqual(added.loader_name, "Zohan Loader 1")
+
+    async def test_loaderadd_duplicate_prevented(self):
+        admin_uid = 8261988472
+        group_id = -1003464814539
+
+        # Ensure loader is added
+        await add_loader(group_id, "Zohan Loader 1")
+        await reload_loaders_cache()
+
+        update = MagicMock()
+        update.effective_user.id = admin_uid
+        update.effective_message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = [str(group_id)]
+
+        await loaderadd_command(update, context)
+        reply = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("already exists", reply)
+        self.assertIn("Zohan Loader 1", reply)
+        self.assertIn(str(group_id), reply)
+
+    async def test_calculator_full_flow(self):
+        chat_id = -100999010
+        await paid_group_total(chat_id)
+
+        # Admin sends 100 -> before 0, now 100, total 100
+        up1 = MagicMock()
+        up1.effective_chat.id = chat_id
+        up1.effective_user.id = 8261988472
+        up1.effective_message.text = "100"
+        up1.effective_message.reply_text = AsyncMock()
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(up1, MagicMock())
+        rep1 = up1.effective_message.reply_text.call_args[0][0]
+        self.assertIn("before: 0", rep1)
+        self.assertIn("now: 100", rep1)
+        self.assertIn("total: 100", rep1)
+
+        # Admin sends 50+50 -> before 100, now 100, total 200
+        up2 = MagicMock()
+        up2.effective_chat.id = chat_id
+        up2.effective_user.id = 8261988472
+        up2.effective_message.text = "50+50"
+        up2.effective_message.reply_text = AsyncMock()
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(up2, MagicMock())
+        rep2 = up2.effective_message.reply_text.call_args[0][0]
+        self.assertIn("before: 100", rep2)
+        self.assertIn("now: 100", rep2)
+        self.assertIn("total: 200", rep2)
+
+        # Admin sends 2400+880 -> before 200, now 3280, total 3480
+        up3 = MagicMock()
+        up3.effective_chat.id = chat_id
+        up3.effective_user.id = 8261988472
+        up3.effective_message.text = "2400+880"
+        up3.effective_message.reply_text = AsyncMock()
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(up3, MagicMock())
+        rep3 = up3.effective_message.reply_text.call_args[0][0]
+        self.assertIn("before: 200", rep3)
+        self.assertIn("now: 3280", rep3)
+        self.assertIn("total: 3480", rep3)
+
+        # Admin sends 0 -> Remaining Amount: 3480
+        up4 = MagicMock()
+        up4.effective_chat.id = chat_id
+        up4.effective_user.id = 8261988472
+        up4.effective_message.text = "0"
+        up4.effective_message.reply_text = AsyncMock()
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(up4, MagicMock())
+        rep4 = up4.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Remaining Amount: 3480", rep4)
+
+    async def test_loaderadd_command_never_reaches_calculator(self):
+        update = MagicMock()
+        update.effective_chat.id = -100999011
+        update.effective_user.id = 8261988472
+        update.effective_message.text = "/loaderadd -1003464814539"
+        update.effective_message.reply_text = AsyncMock()
+
+        # calculator_text_handler must not raise ApplicationHandlerStop on /loaderadd command
+        await calculator_text_handler(update, MagicMock())
+        update.effective_message.reply_text.assert_not_called()
 
 
 class TestRealCustomerOrderDetection(unittest.TestCase):
