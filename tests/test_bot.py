@@ -26,13 +26,9 @@ from utils import is_super_admin, is_delivery_user
 from main import validate_bot_command
 from calculator import (
     safe_eval,
-    parse_before_now,
-    calculate_input,
-    start_calculator_session,
-    cancel_calculator_session,
-    has_active_calculator_session,
-    process_calculator_session_input,
-    CALCULATOR_SESSIONS
+    format_num,
+    is_math_expression,
+    evaluate_math_expression
 )
 from handlers import (
     LOADER_ADD_SESSION,
@@ -41,7 +37,11 @@ from handlers import (
     edited_message_handler,
     calc_command,
     calccancel_command,
-    calculator_text_session_handler
+    calculator_text_handler,
+    paid_command,
+    undo_command,
+    myid_command,
+    broadcast_command
 )
 from database import (
     BOT_SETTINGS,
@@ -82,7 +82,12 @@ from database import (
     get_or_create_settings,
     update_source_group,
     update_delivery_group,
-    reset_groups
+    reset_groups,
+    get_group_total_balance,
+    add_to_group_total,
+    paid_group_total,
+    undo_group_total,
+    get_all_group_totals_chat_ids
 )
 
 
@@ -439,7 +444,10 @@ class TestTwoGroupDatabaseWorkflow(unittest.IsolatedAsyncioTestCase):
 
 
 class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
-    """Tests for Super Admin Message Ignore and Super Admin Calculator features."""
+    """Tests for Instant Group-Wise Accounting Calculator & Super Admin Access."""
+
+    async def asyncSetUp(self):
+        await init_db()
 
     def test_safe_eval_valid_math(self):
         self.assertEqual(safe_eval("100+50"), 150)
@@ -447,7 +455,7 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(safe_eval("1000 / 4"), 250)
         self.assertEqual(safe_eval("(100 + 50) * 2"), 300)
         self.assertEqual(safe_eval("-50 + 100"), 50)
-        self.assertEqual(safe_eval("10.5 + 4.5"), 15)
+        self.assertEqual(safe_eval("15.2 * 2"), 30.4)
 
     def test_safe_eval_zero_division(self):
         with self.assertRaises(ZeroDivisionError):
@@ -465,46 +473,166 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             safe_eval("'string_literal'")
 
-    def test_calculate_input_before_now_single(self):
-        res1 = calculate_input("before 100 now 150")
-        self.assertIn("Before:</b> 100", res1)
-        self.assertIn("Now:</b> 150", res1)
-        self.assertIn("Total:</b> +50", res1)
+    async def test_super_admin_sends_number(self):
+        chat_id = -100999001
+        await paid_group_total(chat_id)  # Reset balance to 0
 
-        res2 = calculate_input("before 500 now 350")
-        self.assertIn("Before:</b> 500", res2)
-        self.assertIn("Now:</b> 350", res2)
-        self.assertIn("Total:</b> -150", res2)
+        update = MagicMock()
+        update.effective_chat.id = chat_id
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.text = "100"
+        update.effective_message.reply_text = AsyncMock()
 
-        res3 = calculate_input("before 1000 now 1000")
-        self.assertIn("Total:</b> 0", res3)
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(update, MagicMock())
 
-    def test_calculate_input_flexible_formats(self):
-        res1 = calculate_input("Before: 100 Now: 150")
-        self.assertIn("Total:</b> +50", res1)
-        res2 = calculate_input("before=100 now=150")
-        self.assertIn("Total:</b> +50", res2)
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("before: 0", reply_text)
+        self.assertIn("now: 100", reply_text)
+        self.assertIn("total: 100", reply_text)
 
-    def test_calculate_input_multiple_before_now(self):
-        res = calculate_input("before 100 now 150 before 500 now 350")
-        self.assertIn("1.</b>", res)
-        self.assertIn("Total:</b> +50", res)
-        self.assertIn("2.</b>", res)
-        self.assertIn("Total:</b> -150", res)
-        self.assertIn("Grand Total:</b> -100", res)
+    async def test_super_admin_sends_math_addition(self):
+        chat_id = -100999002
+        await paid_group_total(chat_id)
+        await add_to_group_total(chat_id, 100)
 
-    def test_calculate_input_direct_math(self):
-        res = calculate_input("100+200")
-        self.assertIn("Result:</b> 300", res)
+        update = MagicMock()
+        update.effective_chat.id = chat_id
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.text = "50+50"
+        update.effective_message.reply_text = AsyncMock()
 
-    def test_calculate_input_error_handling(self):
-        res_zero = calculate_input("10 / 0")
-        self.assertIn("Division by zero", res_zero)
-        res_invalid = calculate_input("import os")
-        self.assertIn("Invalid expression", res_invalid)
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(update, MagicMock())
+
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("before: 100", reply_text)
+        self.assertIn("now: 100", reply_text)
+        self.assertIn("total: 200", reply_text)
+
+    async def test_super_admin_sends_math_multiplication(self):
+        chat_id = -100999003
+        await paid_group_total(chat_id)
+        await add_to_group_total(chat_id, 150)
+
+        update = MagicMock()
+        update.effective_chat.id = chat_id
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.text = "15.2*2"
+        update.effective_message.reply_text = AsyncMock()
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(update, MagicMock())
+
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("before: 150", reply_text)
+        self.assertIn("now: 30.4", reply_text)
+        self.assertIn("total: 180.4", reply_text)
+
+    async def test_super_admin_sends_zero(self):
+        chat_id = -100999004
+        await paid_group_total(chat_id)
+        await add_to_group_total(chat_id, 180.4)
+
+        update = MagicMock()
+        update.effective_chat.id = chat_id
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.text = "0"
+        update.effective_message.reply_text = AsyncMock()
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(update, MagicMock())
+
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("💰 Remaining Amount: 180.4", reply_text)
+
+        # Balance should remain unchanged
+        bal = await get_group_total_balance(chat_id)
+        self.assertEqual(bal, 180.4)
+
+    async def test_paid_command(self):
+        chat_id = -100999005
+        await paid_group_total(chat_id)
+        await add_to_group_total(chat_id, 150)
+
+        update = MagicMock()
+        update.effective_chat.id = chat_id
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.reply_text = AsyncMock()
+
+        await paid_command(update, MagicMock())
+
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Paid Amount:</b> 150", reply_text)
+        self.assertIn("Remaining Amount:</b> 0", reply_text)
+
+        # Verify database balance is reset to 0
+        bal = await get_group_total_balance(chat_id)
+        self.assertEqual(bal, 0.0)
+
+    async def test_undo_command(self):
+        chat_id = -100999006
+        await paid_group_total(chat_id)
+        await add_to_group_total(chat_id, 100)  # before 0, now 100, total 100
+        await add_to_group_total(chat_id, 50)   # before 100, now 50, total 150
+
+        update = MagicMock()
+        update.effective_chat.id = chat_id
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.reply_text = AsyncMock()
+
+        await undo_command(update, MagicMock())
+
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Reverted:</b> 150 → 100", reply_text)
+
+        # Verify reverted balance in DB
+        bal = await get_group_total_balance(chat_id)
+        self.assertEqual(bal, 100.0)
+
+        # Subsequent /undo should indicate nothing to undo
+        update_second = MagicMock()
+        update_second.effective_chat.id = chat_id
+        update_second.effective_user.id = 8261988472
+        update_second.effective_message.reply_text = AsyncMock()
+
+        await undo_command(update_second, MagicMock())
+        reply_second = update_second.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Nothing to undo", reply_second)
+
+    async def test_invalid_math_expression(self):
+        update = MagicMock()
+        update.effective_chat.id = -100999007
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.text = "100++"
+        update.effective_message.reply_text = AsyncMock()
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await calculator_text_handler(update, MagicMock())
+
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("Invalid calculation", reply_text)
+
+    async def test_non_super_admin_calculator_input_ignored_or_rejected(self):
+        # Calculator text handler ignores non-super admins (does not raise ApplicationHandlerStop)
+        update = MagicMock()
+        update.effective_chat.id = -100999008
+        update.effective_user.id = 999888777  # Normal user
+        update.effective_message.text = "100"
+        update.effective_message.reply_text = AsyncMock()
+
+        await calculator_text_handler(update, MagicMock())
+        update.effective_message.reply_text.assert_not_called()
+
+        # Non-super admin command rejected
+        update_cmd = MagicMock()
+        update_cmd.effective_user.id = 999888777
+        update_cmd.effective_message.reply_text = AsyncMock()
+        await paid_command(update_cmd, MagicMock())
+        update_cmd.effective_message.reply_text.assert_called_once()
+        self.assertIn("not authorized", update_cmd.effective_message.reply_text.call_args[0][0])
 
     async def test_super_admin_normal_message_ignored(self):
-        await init_db()
         await update_source_group(-1001111111111, "Client Group")
         email = "sa_ignore_test@example.com"
         await delete_orders_by_email(email)
@@ -518,21 +646,9 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
 
         await source_group_handler(update, context)
         order = await get_pending_order_by_email(email)
-        self.assertIsNone(order)  # Super Admin message must be ignored completely!
-
-    async def test_super_admin_edited_message_ignored(self):
-        update = MagicMock()
-        update.effective_chat.id = -1001111111111
-        update.effective_user.id = 8261988472  # Super Admin
-        update.edited_message.message_id = 999
-        update.edited_message.reply_text = AsyncMock()
-        context = MagicMock()
-
-        await edited_message_handler(update, context)
-        update.edited_message.reply_text.assert_not_called()
+        self.assertIsNone(order)  # Super Admin message must be ignored completely by order detection!
 
     async def test_customer_order_detection_still_works(self):
-        await init_db()
         await update_source_group(-1001111111111, "Client Group")
         email = "cust_order_test@example.com"
         await delete_orders_by_email(email)
@@ -552,104 +668,33 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order.email, email)
         await delete_orders_by_email(email)
 
-    async def test_non_super_admin_calc_rejected(self):
-        update = MagicMock()
-        update.effective_user.id = 999888777  # Non-admin
-        update.effective_message.reply_text = AsyncMock()
-        context = MagicMock()
-        context.args = ["100+50"]
+    async def test_independent_group_totals(self):
+        chat_a = -100111000
+        chat_b = -100222000
+        await paid_group_total(chat_a)
+        await paid_group_total(chat_b)
 
-        await calc_command(update, context)
-        update.effective_message.reply_text.assert_called_once()
-        called_text = update.effective_message.reply_text.call_args[0][0]
-        self.assertIn("not authorized", called_text)
+        await add_to_group_total(chat_a, 100)
+        await add_to_group_total(chat_b, 500)
 
-    async def test_super_admin_calculate_command(self):
-        update = MagicMock()
-        update.effective_user.id = 8261988472  # Super Admin
-        update.effective_message.reply_text = AsyncMock()
-        context = MagicMock()
-        context.args = ["before", "100", "now", "150"]
+        bal_a = await get_group_total_balance(chat_a)
+        bal_b = await get_group_total_balance(chat_b)
 
-        await calc_command(update, context)
-        update.effective_message.reply_text.assert_called_once()
-        called_text = update.effective_message.reply_text.call_args[0][0]
-        self.assertIn("Total:</b> +50", called_text)
+        self.assertEqual(bal_a, 100.0)
+        self.assertEqual(bal_b, 500.0)
 
-    async def test_interactive_calculator_session_flow(self):
-        sa_uid = 8261988472
-        CALCULATOR_SESSIONS.pop(sa_uid, None)
+    async def test_multiple_calculator_operations_state(self):
+        chat_id = -100999009
+        await paid_group_total(chat_id)
 
-        # 1. Start session with /calc
-        update_start = MagicMock()
-        update_start.effective_user.id = sa_uid
-        update_start.effective_message.reply_text = AsyncMock()
-        context_start = MagicMock()
-        context_start.args = []
+        b1, n1, t1 = await add_to_group_total(chat_id, 100)
+        self.assertEqual((b1, n1, t1), (0.0, 100.0, 100.0))
 
-        await calc_command(update_start, context_start)
-        self.assertTrue(has_active_calculator_session(sa_uid))
-        start_reply = update_start.effective_message.reply_text.call_args[0][0]
-        self.assertIn("Enter BEFORE value:", start_reply)
+        b2, n2, t2 = await add_to_group_total(chat_id, 50)
+        self.assertEqual((b2, n2, t2), (100.0, 50.0, 150.0))
 
-        # 2. Step 1: Send BEFORE value (100)
-        update_before = MagicMock()
-        update_before.effective_user.id = sa_uid
-        update_before.effective_message.text = "100"
-        update_before.effective_message.reply_text = AsyncMock()
-
-        with self.assertRaises(ApplicationHandlerStop):
-            await calculator_text_session_handler(update_before, MagicMock())
-        self.assertTrue(has_active_calculator_session(sa_uid))
-        before_reply = update_before.effective_message.reply_text.call_args[0][0]
-        self.assertIn("Enter NOW value:", before_reply)
-
-        # 3. Step 2: Send NOW value (150)
-        update_now = MagicMock()
-        update_now.effective_user.id = sa_uid
-        update_now.effective_message.text = "150"
-        update_now.effective_message.reply_text = AsyncMock()
-
-        with self.assertRaises(ApplicationHandlerStop):
-            await calculator_text_session_handler(update_now, MagicMock())
-        self.assertFalse(has_active_calculator_session(sa_uid))
-        now_reply = update_now.effective_message.reply_text.call_args[0][0]
-        self.assertIn("Before:</b> 100", now_reply)
-        self.assertIn("Now:</b> 150", now_reply)
-        self.assertIn("Total:</b> +50", now_reply)
-
-    async def test_interactive_calculator_negative_and_zero_and_cancel(self):
-        sa_uid = 8261988472
-        CALCULATOR_SESSIONS.pop(sa_uid, None)
-
-        # Negative test (500 -> 350 => -150)
-        start_calculator_session(sa_uid)
-        process_calculator_session_input(sa_uid, "500")
-        res_neg = process_calculator_session_input(sa_uid, "350")
-        self.assertIn("Total:</b> -150", res_neg)
-        self.assertFalse(has_active_calculator_session(sa_uid))
-
-        # Zero test (100 -> 100 => 0)
-        start_calculator_session(sa_uid)
-        process_calculator_session_input(sa_uid, "100")
-        res_zero = process_calculator_session_input(sa_uid, "100")
-        self.assertIn("Total:</b> 0", res_zero)
-        self.assertFalse(has_active_calculator_session(sa_uid))
-
-        # Invalid input keeps session active
-        start_calculator_session(sa_uid)
-        inv_res = process_calculator_session_input(sa_uid, "invalid_abc")
-        self.assertIn("valid number", inv_res)
-        self.assertTrue(has_active_calculator_session(sa_uid))
-
-        # Cancel session with /calccancel
-        update_cancel = MagicMock()
-        update_cancel.effective_user.id = sa_uid
-        update_cancel.effective_message.reply_text = AsyncMock()
-        await calccancel_command(update_cancel, MagicMock())
-        self.assertFalse(has_active_calculator_session(sa_uid))
-        cancel_reply = update_cancel.effective_message.reply_text.call_args[0][0]
-        self.assertIn("cancelled", cancel_reply)
+        b3, n3, t3 = await add_to_group_total(chat_id, 30.4)
+        self.assertEqual((b3, n3, t3), (150.0, 30.4, 180.4))
 
 
 if __name__ == "__main__":

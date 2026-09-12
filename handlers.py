@@ -32,11 +32,9 @@ from email_parser import extract_email, extract_order_id, extract_package, extra
 from media_collector import media_collector, user_session_manager
 from delivery import deliver_order_by_id, deliver_images_for_email
 from calculator import (
-    calculate_input,
-    start_calculator_session,
-    cancel_calculator_session,
-    has_active_calculator_session,
-    process_calculator_session_input
+    format_num,
+    is_math_expression,
+    evaluate_math_expression
 )
 from database import (
     BOT_SETTINGS,
@@ -78,7 +76,12 @@ from database import (
     add_loader,
     remove_loader_by_id,
     get_all_loaders,
-    reload_loaders_cache
+    reload_loaders_cache,
+    get_group_total_balance,
+    add_to_group_total,
+    paid_group_total,
+    undo_group_total,
+    get_all_group_totals_chat_ids
 )
 from models import Order
 from utils import (
@@ -129,8 +132,6 @@ async def source_group_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Super Admin Ignore: Completely ignore any normal message sent by a Super Admin in Client Group
     if user and is_super_admin(user.id):
-        if has_active_calculator_session(user.id):
-            return
         logger.info(f"[CLIENT] Ignored message {message.message_id} from Super Admin ({user.id}) in Client Group.")
         return
 
@@ -1420,10 +1421,11 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles /calc and /calculate commands for Super Admins.
-    If args are provided (e.g. /calc before 100 now 150), evaluates directly.
-    Otherwise, starts an interactive multi-message calculator session.
+    If args are provided (e.g. /calc 100+50), evaluates and adds to current group total.
+    Otherwise, displays accounting calculator usage instructions.
     """
     user = update.effective_user
+    chat = update.effective_chat
     user_id = user.id if user else None
 
     if not is_super_admin(user_id):
@@ -1432,65 +1434,228 @@ async def calc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.effective_message.reply_text("⛔ You are not authorized to use this command.")
         return
 
+    if not update.effective_message or not chat:
+        return
+
     raw_args = " ".join(context.args) if context.args else ""
-    if not raw_args and update.effective_message and update.effective_message.text:
-        text = update.effective_message.text.strip()
-        parts = text.split(maxsplit=1)
+    if not raw_args and update.effective_message.text:
+        parts = update.effective_message.text.strip().split(maxsplit=1)
         if len(parts) > 1:
             raw_args = parts[1]
 
     if raw_args:
-        response_html = calculate_input(raw_args)
-    else:
-        response_html = start_calculator_session(user_id)
+        is_valid, amount = evaluate_math_expression(raw_args)
+        if is_valid and amount is not None:
+            before, now, total = await add_to_group_total(chat.id, amount)
+            reply = (
+                f"before: {format_num(before)}\n"
+                f"now: {format_num(now)}\n"
+                f"total: {format_num(total)}"
+            )
+            await update.effective_message.reply_text(reply)
+            return
+        else:
+            await update.effective_message.reply_text("❌ Invalid calculation.")
+            return
 
-    if update.effective_message:
-        await update.effective_message.reply_text(response_html, parse_mode="HTML")
+    help_text = (
+        "🧮 <b>Calculator</b>\n\n"
+        "Send a number or math expression directly in chat:\n"
+        "• <code>100</code>\n"
+        "• <code>50+50</code>\n"
+        "• <code>15.2*2</code>\n"
+        "• <code>500-120</code>\n"
+        "• <code>0</code> (Check remaining balance)\n"
+        "• <code>/paid</code> (Mark total as paid)\n"
+        "• <code>/undo</code> (Revert last calculation)"
+    )
+    await update.effective_message.reply_text(help_text, parse_mode="HTML")
 
 
 async def calccancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Handles /calccancel command for Super Admins.
-    Cancels an active interactive calculator session.
-    """
+    """Handles /calccancel command for Super Admins."""
     user = update.effective_user
     user_id = user.id if user else None
 
     if not is_super_admin(user_id):
-        logger.warning(f"Unauthorized calccancel access attempt by user_id: {user_id}")
         if update.effective_message:
             await update.effective_message.reply_text("⛔ You are not authorized to use this command.")
         return
 
-    response_html = cancel_calculator_session(user_id)
     if update.effective_message:
-        await update.effective_message.reply_text(response_html, parse_mode="HTML")
+        await update.effective_message.reply_text("❌ Nothing to cancel.")
 
 
-async def calculator_text_session_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def calculator_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Monitors text input for active Super Admin interactive calculator sessions.
-    Intercepts BEFORE and NOW numeric input steps and replies with calculation result.
+    Monitors text messages for Super Admin group-wise accounting calculator inputs.
+    Handles '0' for remaining balance check, numbers/expressions for adding to total,
+    and replies with 'before:\nnow:\ntotal:'.
+    Raises ApplicationHandlerStop() to prevent order processing on calculator inputs.
     """
     message = update.effective_message
+    chat = update.effective_chat
     user = update.effective_user
 
-    if not message or not user:
+    if not message or not chat or not user:
         return
 
     if not is_super_admin(user.id):
         return
 
-    if not has_active_calculator_session(user.id):
-        return
-
-    text_content = message.text or ""
+    text_content = (message.text or "").strip()
     if not text_content:
         return
 
-    response_html = process_calculator_session_input(user.id, text_content)
-    await message.reply_text(response_html, parse_mode="HTML")
-    raise ApplicationHandlerStop()
+    # Check if message is '0'
+    if text_content == "0":
+        total_val = await get_group_total_balance(chat.id)
+        reply = f"💰 Remaining Amount: {format_num(total_val)}"
+        await message.reply_text(reply)
+        logger.info(f"[CALC] Super Admin {user.id} checked remaining balance in chat {chat.id}: {total_val}")
+        raise ApplicationHandlerStop()
+
+    # Check if message is a math expression or number
+    if is_math_expression(text_content):
+        is_valid, amount = evaluate_math_expression(text_content)
+        if is_valid and amount is not None:
+            before, now, total = await add_to_group_total(chat.id, amount)
+            reply = (
+                f"before: {format_num(before)}\n"
+                f"now: {format_num(now)}\n"
+                f"total: {format_num(total)}"
+            )
+            await message.reply_text(reply)
+            logger.info(f"[CALC] Super Admin {user.id} added {now} in chat {chat.id} (Before: {before}, Total: {total})")
+            raise ApplicationHandlerStop()
+        else:
+            # If string contains digits/operators but is invalid math (e.g. 100++ or 10/0)
+            await message.reply_text("❌ Invalid calculation.")
+            logger.info(f"[CALC] Super Admin {user.id} invalid calculation attempt: '{text_content}'")
+            raise ApplicationHandlerStop()
+
+
+async def paid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles /paid command for Super Admins.
+    Resets group balance to 0 and displays payment summary.
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    user_id = user.id if user else None
+
+    if not is_super_admin(user_id):
+        if update.effective_message:
+            await update.effective_message.reply_text("⛔ You are not authorized to use this command.")
+        return
+
+    if not chat or not update.effective_message:
+        return
+
+    paid_amount, remaining = await paid_group_total(chat.id)
+    reply = (
+        "✅ <b>Payment Received</b>\n\n"
+        f"<b>Paid Amount:</b> {format_num(paid_amount)}\n"
+        f"<b>Remaining Amount:</b> {format_num(remaining)}"
+    )
+    await update.effective_message.reply_text(reply, parse_mode="HTML")
+    logger.info(f"[CALC] Super Admin {user_id} marked payment received in chat {chat.id} (Paid: {paid_amount})")
+
+
+async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles /undo command for Super Admins.
+    Reverts the most recent calculator operation for current group.
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    user_id = user.id if user else None
+
+    if not is_super_admin(user_id):
+        if update.effective_message:
+            await update.effective_message.reply_text("⛔ You are not authorized to use this command.")
+        return
+
+    if not chat or not update.effective_message:
+        return
+
+    success, old_total, reverted_total = await undo_group_total(chat.id)
+    if not success or old_total is None or reverted_total is None:
+        await update.effective_message.reply_text("❌ Nothing to undo.")
+        return
+
+    reply = (
+        "↩️ <b>Undo successful</b>\n\n"
+        f"<b>Reverted:</b> {format_num(old_total)} → {format_num(reverted_total)}"
+    )
+    await update.effective_message.reply_text(reply, parse_mode="HTML")
+    logger.info(f"[CALC] Super Admin {user_id} reverted calculation in chat {chat.id} ({old_total} -> {reverted_total})")
+
+
+async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles /myid command displaying user_id and chat_id."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if not update.effective_message:
+        return
+    u_id = user.id if user else "N/A"
+    c_id = chat.id if chat else "N/A"
+    reply = f"👤 <b>user_id:</b> <code>{u_id}</code>\n💬 <b>chat_id:</b> <code>{c_id}</code>"
+    await update.effective_message.reply_text(reply, parse_mode="HTML")
+
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles /broadcast command for Super Admins.
+    Broadcasts message or replied-to media to all stored chat_ids in group_totals and client groups.
+    """
+    user = update.effective_user
+    if not is_super_admin(user.id if user else None):
+        if update.effective_message:
+            await update.effective_message.reply_text("⛔ You are not authorized to use this command.")
+        return
+
+    message = update.effective_message
+    if not message:
+        return
+
+    calc_chats = await get_all_group_totals_chat_ids()
+    client_chats = list(CLIENT_GROUPS_CACHE.keys())
+    all_target_chats = list(set(calc_chats + client_chats))
+
+    if not all_target_chats:
+        await message.reply_text("⚠️ No active target groups registered for broadcast.")
+        return
+
+    reply_to_msg = message.reply_to_message
+    raw_args = " ".join(context.args) if context.args else ""
+
+    if not reply_to_msg and not raw_args:
+        await message.reply_text("⚠️ Usage: <code>/broadcast &lt;message&gt;</code> or reply to a message with <code>/broadcast</code>", parse_mode="HTML")
+        return
+
+    await message.reply_text(f"⏳ Broadcast started for {len(all_target_chats)} target group(s)...")
+
+    success_count = 0
+    fail_count = 0
+
+    for chat_id in all_target_chats:
+        try:
+            if reply_to_msg:
+                await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=reply_to_msg.chat_id,
+                    message_id=reply_to_msg.message_id
+                )
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=raw_args)
+            success_count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.warning(f"[BROADCAST] Failed to send broadcast to chat {chat_id}: {e}")
+            fail_count += 1
+
+    await message.reply_text(f"✅ Broadcast completed.\n\nSuccessful: <b>{success_count}</b>\nFailed: <b>{fail_count}</b>", parse_mode="HTML")
 
 
 # ==========================================
@@ -2039,7 +2204,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• <code>/stats</code> - Rich statistics dashboard\n"
         "• <code>/export</code> - Export CSV report\n"
         "• <code>/backup</code> - Backup SQLite database\n"
-        "• <code>/restore</code> - Restore SQLite database\n"
+        "• <code>/restore</code> - Restore SQLite database\n\n"
+        "🔢 <b>Calculator:</b>\n"
+        "• Send a number to add it to total (e.g. <code>100</code>)\n"
+        "• Send math expression (e.g. <code>50+50</code>, <code>15.2*2</code>)\n"
+        "• Send <code>0</code> to check remaining amount\n"
+        "• <code>/paid</code> - Mark current total as paid\n"
+        "• <code>/undo</code> - Undo last calculation\n"
+        "• <code>/myid</code> - View your Telegram User ID & Chat ID\n"
+        "• <code>/broadcast</code> - Broadcast message to all registered groups\n"
     )
     await update.effective_message.reply_text(help_msg, parse_mode="HTML")
 

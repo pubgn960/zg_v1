@@ -1,13 +1,13 @@
 """
-Safe mathematical evaluator and Multi-Message Interactive Calculator Session for Telegram Email Image Delivery Bot.
-Provides AST-whitelist arithmetic evaluation, interactive per-user Super Admin calculator sessions, and HTML response formatting.
-Exclusively handles math and memory calculations without database queries or eval().
+Safe mathematical evaluator and Accounting Calculator Engine for Telegram Email Image Delivery Bot.
+Provides AST-whitelist arithmetic evaluation, string number formatting, and math expression detection.
+Exclusively handles math evaluation without database queries or eval().
 """
 
 import ast
 import re
 import logging
-from typing import Union, List, Tuple, Dict, Any
+from typing import Union, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,6 @@ MAX_EXPR_LENGTH = 200
 MAX_EXPONENT = 1000
 # Maximum allowed AST node count
 MAX_AST_NODES = 50
-
-# Per-user in-memory calculator session dictionary (user_id -> {"step": "before" | "now", "before": float/int})
-CALCULATOR_SESSIONS: Dict[int, Dict[str, Any]] = {}
 
 
 class SafeEvalVisitor(ast.NodeVisitor):
@@ -111,14 +108,15 @@ def safe_eval(expr: str) -> Union[int, float]:
     visitor = SafeEvalVisitor()
     result = visitor.visit(parsed_ast)
 
-    # Return integer if result is a whole number float (e.g. 150.0 -> 150)
     if isinstance(result, float) and result.is_integer():
         return int(result)
     return result
 
 
-def format_num(val: Union[int, float]) -> str:
-    """Formats numeric value for HTML display without unnecessary trailing zeros."""
+def format_num(val: Optional[Union[int, float]]) -> str:
+    """Formats numeric value for display without unnecessary trailing zeros."""
+    if val is None:
+        return "0"
     if isinstance(val, float):
         if val.is_integer():
             return str(int(val))
@@ -126,181 +124,32 @@ def format_num(val: Union[int, float]) -> str:
     return str(val)
 
 
-def format_signed_num(val: Union[int, float]) -> str:
-    """Formats numeric total with explicit + / - sign."""
-    formatted = format_num(val)
-    if val > 0:
-        return f"+{formatted}"
-    return formatted
-
-
-# ==========================================
-# Interactive Multi-Message Session API
-# ==========================================
-
-def start_calculator_session(user_id: int) -> str:
+def is_math_expression(text: str) -> bool:
     """
-    Starts an interactive multi-message calculator session for a Super Admin.
-    Initializes step to 'before'.
+    Determines if text string looks like a numeric value or arithmetic expression.
+    Checks for digits and basic arithmetic operators while excluding words/emails.
     """
-    CALCULATOR_SESSIONS[user_id] = {"step": "before"}
-    logger.info(f"[CALC] Started calculator session for Super Admin {user_id}")
-    return "🧮 <b>Calculator</b>\n\nEnter BEFORE value:"
+    clean = text.strip()
+    if not clean:
+        return False
+    # Exclude text containing alphabetic letters or underscore
+    if re.search(r'[a-zA-Z_]', clean):
+        return False
+    # Must contain at least one digit
+    return bool(re.search(r'\d', clean))
 
 
-def cancel_calculator_session(user_id: int) -> str:
+def evaluate_math_expression(text: str) -> Tuple[bool, Optional[Union[int, float]]]:
     """
-    Cancels an active calculator session for a Super Admin.
+    Evaluates math expression safely.
+    Returns (is_valid, numeric_result_or_None).
     """
-    existed = CALCULATOR_SESSIONS.pop(user_id, None)
-    if existed:
-        logger.info(f"[CALC] Cancelled calculator session for Super Admin {user_id}")
-    return "❌ Calculator cancelled."
-
-
-def has_active_calculator_session(user_id: int) -> bool:
-    """
-    Checks whether a Super Admin has an active calculator session.
-    """
-    return user_id in CALCULATOR_SESSIONS
-
-
-def process_calculator_session_input(user_id: int, text: str) -> str:
-    """
-    Processes numeric input for active calculator session (Step 1 BEFORE / Step 2 NOW).
-    """
-    session = CALCULATOR_SESSIONS.get(user_id)
-    if not session:
-        return "❌ No active calculator session."
+    if not is_math_expression(text):
+        return False, None
 
     try:
-        val = safe_eval(text.strip())
+        res = safe_eval(text)
+        return True, res
     except Exception as e:
-        logger.debug(f"[CALC] Invalid numeric input '{text}' from Super Admin {user_id}: {e}")
-        return "❌ Please enter a valid number."
-
-    step = session.get("step")
-    if step == "before":
-        CALCULATOR_SESSIONS[user_id] = {
-            "step": "now",
-            "before": val
-        }
-        logger.info(f"[CALC] Received BEFORE {val} from Super Admin {user_id}")
-        return "Enter NOW value:"
-    elif step == "now":
-        before_val = session.get("before", 0)
-        now_val = val
-        total = now_val - before_val
-        CALCULATOR_SESSIONS.pop(user_id, None)
-        logger.info(f"[CALC] Received NOW {now_val} from Super Admin {user_id}")
-        logger.info(f"[CALC] Calculation completed for Super Admin {user_id}: {format_signed_num(total)}")
-        return (
-            "🧮 <b>Calculation</b>\n\n"
-            f"<b>Before:</b> {format_num(before_val)}\n"
-            f"<b>Now:</b> {format_num(now_val)}\n"
-            f"<b>Total:</b> {format_signed_num(total)}"
-        )
-
-    CALCULATOR_SESSIONS.pop(user_id, None)
-    return "❌ Invalid session state."
-
-
-def parse_before_now(text: str) -> List[Tuple[Union[int, float], Union[int, float], Union[int, float]]]:
-    """
-    Parses 'before' and 'now' value pairs from input string (Single-line helper).
-    """
-    results = []
-
-    pattern_bn = re.compile(
-        r'before\s*[:=]?\s*([^\s\a-zA-Z]+|\(?[-+*/.0-9()]+\)?)\s*now\s*[:=]?\s*([^\s\a-zA-Z]+|\(?[-+*/.0-9()]+\)?)',
-        re.IGNORECASE
-    )
-    matches_bn = pattern_bn.findall(text)
-
-    if matches_bn:
-        for b_str, n_str in matches_bn:
-            b_val = safe_eval(b_str)
-            n_val = safe_eval(n_str)
-            total = n_val - b_val
-            results.append((b_val, n_val, total))
-        return results
-
-    pattern_nb = re.compile(
-        r'now\s*[:=]?\s*([^\s\a-zA-Z]+|\(?[-+*/.0-9()]+\)?)\s*before\s*[:=]?\s*([^\s\a-zA-Z]+|\(?[-+*/.0-9()]+\)?)',
-        re.IGNORECASE
-    )
-    matches_nb = pattern_nb.findall(text)
-
-    if matches_nb:
-        for n_str, b_str in matches_nb:
-            b_val = safe_eval(b_str)
-            n_val = safe_eval(n_str)
-            total = n_val - b_val
-            results.append((b_val, n_val, total))
-        return results
-
-    return []
-
-
-def calculate_input(raw_args: str) -> str:
-    """
-    Single-line entry point for processing calculator command input text.
-    Handles Before/Now mode and Direct Math mode.
-    """
-    clean_text = raw_args.strip()
-    if not clean_text:
-        return (
-            "❌ <b>Invalid format.</b>\n\n"
-            "<b>Usage Examples:</b>\n"
-            "• <code>/calc before 100 now 150</code>\n"
-            "• <code>/calc 100+50</code>\n"
-            "• <code>/calc before 100 now 150 before 500 now 350</code>"
-        )
-
-    if re.search(r'\bbefore\b|\bnow\b', clean_text, re.IGNORECASE):
-        try:
-            pairs = parse_before_now(clean_text)
-            if not pairs:
-                return (
-                    "❌ <b>Invalid format.</b>\n\n"
-                    "Use: <code>/calc before 100 now 150</code>"
-                )
-
-            if len(pairs) == 1:
-                b_val, n_val, total = pairs[0]
-                return (
-                    "📊 <b>Calculator</b>\n\n"
-                    f"<b>Before:</b> {format_num(b_val)}\n"
-                    f"<b>Now:</b> {format_num(n_val)}\n"
-                    f"<b>Total:</b> {format_signed_num(total)}"
-                )
-            else:
-                lines = ["📊 <b>Calculator</b>\n"]
-                grand_total = 0
-                for idx, (b_val, n_val, total) in enumerate(pairs, start=1):
-                    grand_total += total
-                    lines.append(
-                        f"<b>{idx}.</b>\n"
-                        f"<b>Before:</b> {format_num(b_val)}\n"
-                        f"<b>Now:</b> {format_num(n_val)}\n"
-                        f"<b>Total:</b> {format_signed_num(total)}\n"
-                    )
-                lines.append(f"<b>Grand Total:</b> {format_signed_num(grand_total)}")
-                return "\n".join(lines)
-        except ZeroDivisionError:
-            return "❌ <b>Error:</b> Division by zero"
-        except Exception as e:
-            logger.warning(f"[CALC] Before/Now parsing failed: {e}")
-            return (
-                "❌ <b>Invalid format.</b>\n\n"
-                "Use: <code>/calc before 100 now 150</code>"
-            )
-
-    try:
-        val = safe_eval(clean_text)
-        return f"🧮 <b>Result:</b> {format_num(val)}"
-    except ZeroDivisionError:
-        return "❌ <b>Error:</b> Division by zero"
-    except Exception as e:
-        logger.warning(f"[CALC] Direct math eval failed for '{clean_text}': {e}")
-        return "❌ <b>Invalid expression</b>"
+        logger.debug(f"[CALC] Safe math eval failed for '{text}': {e}")
+        return False, None

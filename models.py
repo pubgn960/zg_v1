@@ -7,7 +7,7 @@ Multi Loader Approval System, and Category A Only Price Workflow with prompt & c
 
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import String, Integer, BigInteger, DateTime, ForeignKey, Index
+from sqlalchemy import String, Integer, BigInteger, DateTime, ForeignKey, Index, Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -93,6 +93,25 @@ class Loader(Base):
     def __repr__(self) -> str:
         return f"<Loader(id={self.id}, name='{self.loader_name}', group_id={self.group_id})>"
 
+
+class GroupTotal(Base):
+    """
+    Stores per-group running totals and accounting state for Super Admin calculator.
+    chat_id: Telegram chat/group ID (Primary Key)
+    total: Current group balance
+    previous_total: Previous balance before last operation (for /undo)
+    last_amount: Last added/evaluated amount
+    """
+
+    __tablename__ = "group_totals"
+
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    total: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    previous_total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<GroupTotal(chat_id={self.chat_id}, total={self.total}, previous={self.previous_total})>"
 
 
 class Order(Base):

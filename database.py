@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import selectinload
 
 from config import Config
-from models import Base, Order, Image, Settings, ClientGroup, Loader
+from models import Base, Order, Image, Settings, ClientGroup, Loader, GroupTotal
 
 logger = logging.getLogger(__name__)
 
@@ -931,3 +931,110 @@ async def get_db_file_path() -> Optional[str]:
         if os.path.exists(path):
             return path
     return None
+
+
+# ==========================================
+# Group-Wise Accounting Calculator Operations
+# ==========================================
+
+async def get_group_total_record(chat_id: int) -> GroupTotal:
+    """Retrieves or creates GroupTotal record for chat_id."""
+    async with AsyncSessionLocal() as session:
+        stmt = select(GroupTotal).where(GroupTotal.chat_id == chat_id)
+        res = await session.execute(stmt)
+        record = res.scalar_one_or_none()
+        if not record:
+            record = GroupTotal(chat_id=chat_id, total=0.0, previous_total=None, last_amount=None)
+            session.add(record)
+            await session.commit()
+            await session.refresh(record)
+        return record
+
+
+async def get_group_total_balance(chat_id: int) -> float:
+    """Returns current total balance for chat_id."""
+    record = await get_group_total_record(chat_id)
+    return record.total
+
+
+async def add_to_group_total(chat_id: int, amount: float) -> Tuple[float, float, float]:
+    """
+    Adds amount to current group total.
+    Returns (before_total, added_amount, new_total).
+    Updates previous_total = before, last_amount = amount, total = new_total.
+    """
+    async with AsyncSessionLocal() as session:
+        stmt = select(GroupTotal).where(GroupTotal.chat_id == chat_id)
+        res = await session.execute(stmt)
+        record = res.scalar_one_or_none()
+        if not record:
+            record = GroupTotal(chat_id=chat_id, total=0.0, previous_total=None, last_amount=None)
+            session.add(record)
+            await session.flush()
+
+        before_val = float(record.total or 0.0)
+        now_val = float(amount)
+        new_total_val = before_val + now_val
+
+        record.previous_total = before_val
+        record.last_amount = now_val
+        record.total = new_total_val
+
+        await session.commit()
+        return before_val, now_val, new_total_val
+
+
+async def paid_group_total(chat_id: int) -> Tuple[float, float]:
+    """
+    Marks current group total as paid (resets total to 0).
+    Returns (paid_amount, remaining_amount=0).
+    Updates previous_total = current_total, total = 0, last_amount = None.
+    """
+    async with AsyncSessionLocal() as session:
+        stmt = select(GroupTotal).where(GroupTotal.chat_id == chat_id)
+        res = await session.execute(stmt)
+        record = res.scalar_one_or_none()
+        if not record:
+            record = GroupTotal(chat_id=chat_id, total=0.0, previous_total=None, last_amount=None)
+            session.add(record)
+            await session.flush()
+
+        before_val = float(record.total or 0.0)
+        record.previous_total = before_val
+        record.total = 0.0
+        record.last_amount = None
+
+        await session.commit()
+        return before_val, 0.0
+
+
+async def undo_group_total(chat_id: int) -> Tuple[bool, Optional[float], Optional[float]]:
+    """
+    Reverts last calculation operation for chat_id.
+    Returns (success, old_total, reverted_total).
+    Clears previous_total and last_amount to prevent repeated undo.
+    """
+    async with AsyncSessionLocal() as session:
+        stmt = select(GroupTotal).where(GroupTotal.chat_id == chat_id)
+        res = await session.execute(stmt)
+        record = res.scalar_one_or_none()
+        if not record or record.previous_total is None:
+            return False, None, None
+
+        old_total_val = float(record.total or 0.0)
+        reverted_val = float(record.previous_total)
+
+        record.total = reverted_val
+        record.previous_total = None
+        record.last_amount = None
+
+        await session.commit()
+        return True, old_total_val, reverted_val
+
+
+async def get_all_group_totals_chat_ids() -> List[int]:
+    """Returns list of all chat_ids stored in group_totals table."""
+    async with AsyncSessionLocal() as session:
+        stmt = select(GroupTotal.chat_id)
+        res = await session.execute(stmt)
+        return list(res.scalars().all())
