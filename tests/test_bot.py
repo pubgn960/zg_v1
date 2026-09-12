@@ -951,6 +951,25 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
         await calculator_text_handler(update, MagicMock())
         update.effective_message.reply_text.assert_not_called()
 
+    async def test_source_group_handler_routes_super_admin_calculator(self):
+        chat_id = -100999012
+        await paid_group_total(chat_id)
+        await update_source_group(chat_id, "Client Group")
+
+        update = MagicMock()
+        update.effective_chat.id = chat_id
+        update.effective_user.id = 8261988472  # Super Admin
+        update.effective_message.message_id = 9991
+        update.effective_message.text = "2400+880"
+        update.effective_message.reply_text = AsyncMock()
+
+        await source_group_handler(update, MagicMock())
+
+        reply = update.effective_message.reply_text.call_args[0][0]
+        self.assertIn("before: 0", reply)
+        self.assertIn("now: 3280", reply)
+        self.assertIn("total: 3280", reply)
+
 
 class TestRealCustomerOrderDetection(unittest.TestCase):
     """Tests exact real customer order test cases 1 through 10, Telegram escaping, and Markdown formatting."""

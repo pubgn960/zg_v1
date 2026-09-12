@@ -131,9 +131,14 @@ async def source_group_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message or not chat:
         return
 
-    # Super Admin Ignore: Completely ignore any normal message sent by a Super Admin in Client Group
+    # Super Admin Message Routing: Check if it's calculator input first
     if user and is_super_admin(user.id):
-        logger.info(f"[CLIENT] Ignored message {message.message_id} from Super Admin ({user.id}) in Client Group.")
+        is_calc = await process_calculator_input(update, context)
+        if is_calc:
+            return  # Handled as calculator! DO NOT log ignored, DO NOT create customer order.
+
+        # If NOT calculator input: log non-calculator ignore and return
+        logger.info(f"[CLIENT] Ignored non-calculator message from Super Admin ({user.id}) in Client Group.")
         return
 
     # Check against in-memory BOT_SETTINGS and CLIENT_GROUPS_CACHE (Zero DB SELECT query)
@@ -1529,37 +1534,48 @@ async def calccancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_message.reply_text("❌ Nothing to cancel.")
 
 
-async def calculator_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def process_calculator_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    Monitors text messages for Super Admin group-wise accounting calculator inputs.
-    Handles '0' for remaining balance check, numbers/expressions for adding to total,
-    and replies with 'before:\nnow:\ntotal:'.
-    Raises ApplicationHandlerStop() to prevent order processing on calculator inputs.
+    Evaluates Super Admin text message for calculator inputs ('0' or math expressions).
+    If valid calculator input, replies with total balance / before-now-total, logs calculator events,
+    and returns True. Otherwise returns False.
     """
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
 
     if not message or not chat or not user:
-        return
+        return False
 
     if not is_super_admin(user.id):
-        return
+        return False
 
-    text_content = (message.text or "").strip()
+    # Prevent double processing for the same message ID across handler groups
+    if getattr(update, '_calc_handled_msg_id', None) == message.message_id:
+        return True
+
+    text_content = (message.text or message.caption or "").strip()
     if not text_content:
-        return
+        return False
 
-    # Check if message is '0'
+    # Check if message is '0' (remaining balance)
     if text_content == "0":
+        setattr(update, '_calc_handled_msg_id', message.message_id)
+        logger.info(f"[CALCULATOR] Super Admin calculator input received")
+        logger.info(f"[CALCULATOR] Processing Super Admin message")
         total_val = await get_group_total_balance(chat.id)
         reply = f"💰 Remaining Amount: {format_num(total_val)}"
         await message.reply_text(reply)
-        logger.info(f"[CALC] Super Admin {user.id} checked remaining balance in chat {chat.id}: {total_val}")
-        raise ApplicationHandlerStop()
+        logger.info(f"[CALCULATOR] Result successfully calculated: remaining balance {total_val} for chat {chat.id}")
+        return True
 
     # Check if message is a math expression or number
     if is_math_expression(text_content):
+        setattr(update, '_calc_handled_msg_id', message.message_id)
+        logger.info(f"[CALCULATOR] Super Admin calculator input received")
+        logger.info(f"[CALCULATOR] Processing Super Admin message")
+        logger.info(f"[CALCULATOR] Processing expression: {text_content}")
+
         is_valid, amount = evaluate_math_expression(text_content)
         if is_valid and amount is not None:
             before, now, total = await add_to_group_total(chat.id, amount)
@@ -1569,13 +1585,26 @@ async def calculator_text_handler(update: Update, context: ContextTypes.DEFAULT_
                 f"total: {format_num(total)}"
             )
             await message.reply_text(reply)
-            logger.info(f"[CALC] Super Admin {user.id} added {now} in chat {chat.id} (Before: {before}, Total: {total})")
-            raise ApplicationHandlerStop()
+            logger.info(f"[CALCULATOR] Result successfully calculated: added {now} in chat {chat.id} (Before: {before}, Total: {total})")
+            return True
         else:
-            # If string contains digits/operators but is invalid math (e.g. 100++ or 10/0)
             await message.reply_text("❌ Invalid calculation.")
-            logger.info(f"[CALC] Super Admin {user.id} invalid calculation attempt: '{text_content}'")
-            raise ApplicationHandlerStop()
+            logger.info(f"[CALCULATOR] Invalid calculation attempt by Super Admin {user.id}: '{text_content}'")
+            return True
+
+    return False
+
+
+async def calculator_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Monitors text messages for Super Admin group-wise accounting calculator inputs.
+    Handles '0' for remaining balance check, numbers/expressions for adding to total,
+    and replies with 'before:\nnow:\ntotal:'.
+    Raises ApplicationHandlerStop() to prevent order processing on calculator inputs.
+    """
+    handled = await process_calculator_input(update, context)
+    if handled:
+        raise ApplicationHandlerStop()
 
 
 async def paid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
