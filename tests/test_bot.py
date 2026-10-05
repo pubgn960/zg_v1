@@ -49,6 +49,7 @@ from handlers import (
     broadcast_command
 )
 from database import (
+    AsyncSessionLocal,
     BOT_SETTINGS,
     AUTH_USERS_CACHE,
     CLIENT_GROUPS_CACHE,
@@ -428,8 +429,8 @@ class TestKeywordDetector(unittest.TestCase):
         self.assertTrue(contains_order_keyword("Activision\nEmail: abc@outlook.com\nPassword: pass123\n2400 CP")[0])
 
     def test_keyword_fallback_and_ignores(self):
-        # Configured quick markers are intentionally sufficient for detection.
-        self.assertTrue(contains_order_keyword("10800 CP\nabc@gmail.com")[0])
+        # Strict 4-condition rule: missing platform or password rejects the order
+        self.assertFalse(contains_order_keyword("10800 CP\nabc@gmail.com")[0])
         self.assertFalse(contains_order_keyword("Need CP")[0])
         self.assertFalse(contains_order_keyword("Hello")[0])
         self.assertFalse(contains_order_keyword("10800 CP")[0])
@@ -1005,29 +1006,33 @@ class TestRealCustomerOrderDetection(unittest.TestCase):
         self.assertTrue(res["credential_detected"])
         self.assertTrue(res["package_detected"])
 
-    def test_order_without_platform_is_valid_when_other_details_exist(self):
+    def test_missing_platform_rejected(self):
         msg = "Email: test@gmail.com\nPassword: 123456\n10800"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed Test B: {res}")
+        self.assertFalse(res["order_detected"], f"Failed Test B: {res}")
         self.assertFalse(res["platform_detected"])
+        self.assertIn("Missing platform", res["reason"])
 
-    def test_strict_four_conditions_test_c_no_email(self):
+    def test_missing_email_rejected(self):
         msg = "Facebook\nPassword: 123456\n10800 CP"
         res = parse_order_v2(msg)
         self.assertFalse(res["order_detected"], f"Failed Test C: {res}")
         self.assertFalse(res["login_detected"])
+        self.assertIn("Missing email", res["reason"])
 
-    def test_keyword_fallback_detects_no_password(self):
+    def test_missing_password_rejected(self):
         msg = "Facebook\nEmail: test@gmail.com\n10800 CP"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed Test D: {res}")
+        self.assertFalse(res["order_detected"], f"Failed Test D: {res}")
         self.assertFalse(res["credential_detected"])
+        self.assertIn("Missing password", res["reason"])
 
-    def test_keyword_fallback_detects_no_package(self):
+    def test_missing_package_rejected(self):
         msg = "Facebook\nEmail: test@gmail.com\nPassword: 123456"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed Test E: {res}")
+        self.assertFalse(res["order_detected"], f"Failed Test E: {res}")
         self.assertFalse(res["package_detected"])
+        self.assertIn("Missing package", res["reason"])
 
     def test_user_exact_test_1(self):
         msg = "Facebook\nAbu Naif\n\nedfyak@gmail.com\n\nHRdi1515\n\n880Cp\nFree"
@@ -1061,30 +1066,22 @@ class TestRealCustomerOrderDetection(unittest.TestCase):
         res = parse_order_v2(msg)
         self.assertTrue(res["order_detected"], f"Failed on Test 5: {res}")
 
-    def test_keyword_only_message_is_detected(self):
-        msg = "email@gmail.com"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 6: {res}")
+    def test_incomplete_messages_rejected(self):
+        # Email only -> False
+        res1 = parse_order_v2("email@gmail.com")
+        self.assertFalse(res1["order_detected"])
 
-    def test_user_exact_test_7_keyword_fallback(self):
-        msg = "email@gmail.com\npassword123"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 7: {res}")
+        # Email + password -> False (no platform, no package)
+        res2 = parse_order_v2("email@gmail.com\npassword123")
+        self.assertFalse(res2["order_detected"])
 
-    def test_user_exact_test_8_keyword_fallback(self):
-        msg = "2400+880"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 8: {res}")
+        # Package only -> False
+        res3 = parse_order_v2("2400+880")
+        self.assertFalse(res3["order_detected"])
 
-    def test_user_exact_test_9_keyword_fallback(self):
-        msg = "Facebook\nemail@gmail.com"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 9: {res}")
-
-    def test_user_exact_test_10_keyword_fallback(self):
-        msg = "hello\nemail@gmail.com\nprice 2400"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 10: {res}")
+        # Platform + Email -> False (no password, no package)
+        res4 = parse_order_v2("Facebook\nemail@gmail.com")
+        self.assertFalse(res4["order_detected"])
 
     def test_markdown_formatting_and_telegram_escaping(self):
         # Escaped email
@@ -1251,7 +1248,78 @@ class TestBroadcastFunctionality(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entities[0].type, "bold")
 
 
+class TestLoaderDeliveryAndGroupClassification(unittest.IsolatedAsyncioTestCase):
+    """Tests MultipleResultsFound resolution in get_order_by_loader_msg_id and Loader Group exclusion from Client Group handler."""
+
+    async def asyncSetUp(self):
+        await init_db()
+        CLIENT_GROUPS_CACHE.clear()
+        LOADERS_CACHE.clear()
+        from sqlalchemy import delete
+        from models import ClientGroup, Loader, Order
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(ClientGroup))
+            await session.execute(delete(Loader))
+            await session.execute(delete(Order))
+            await session.commit()
+
+    async def asyncTearDown(self):
+        CLIENT_GROUPS_CACHE.clear()
+        LOADERS_CACHE.clear()
+
+    async def test_duplicate_loader_message_lookup_selects_active_order(self):
+        # Create Order 1 (Old, Delivered)
+        o1 = await create_order("old@gmail.com", category="A")
+        await set_order_loader_message_id(o1.id, 55555, loader_group_id=-100333)
+        await update_order_status(o1.id, "Delivered")
+
+        # Create Order 2 (New, Pending)
+        o2 = await create_order("active@gmail.com", category="A")
+        await set_order_loader_message_id(o2.id, 55555, loader_group_id=-100333)
+
+        # Lookup by loader message id 55555
+        found = await get_order_by_loader_msg_id(55555, loader_group_id=-100333)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.id, o2.id)
+        self.assertEqual(found.email, "active@gmail.com")
+
+    async def test_duplicate_loader_message_lookup_no_active_order(self):
+        # Create Order 1 (Delivered)
+        o1 = await create_order("deliv@gmail.com", category="A")
+        await set_order_loader_message_id(o1.id, 66666, loader_group_id=-100333)
+        await update_order_status(o1.id, "Delivered")
+
+        # Create Order 2 (Cancelled)
+        o2 = await create_order("canc@gmail.com", category="A")
+        await set_order_loader_message_id(o2.id, 66666, loader_group_id=-100333)
+        await cancel_order(o2.id)
+
+        # Lookup by loader message id 66666
+        found = await get_order_by_loader_msg_id(66666, loader_group_id=-100333)
+        self.assertIsNone(found)
+
+    async def test_unknown_loader_message_safely_ignored(self):
+        found = await get_order_by_loader_msg_id(999999, loader_group_id=-100333)
+        self.assertIsNone(found)
+
+    async def test_loader_group_excluded_from_client_handler(self):
+        await add_loader(-1003988988788, "Pratik Group")
+
+        update = MagicMock()
+        update.effective_chat.id = -1003988988788
+        update.effective_chat.title = "Pratik x Azhar codm safe"
+        update.effective_user.id = 123456
+        update.effective_message.text = "Facebook\nemail@gmail.com\npassword123\n10800 CP"
+
+        context = MagicMock()
+
+        with unittest.mock.patch("handlers.parse_order_v2") as mock_parse:
+            await source_group_handler(update, context)
+            mock_parse.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

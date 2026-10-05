@@ -203,13 +203,11 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
                     extracted_pkg = f"{num_val} CP"
                     break
 
-    # A configured quick marker allows early detection when a customer sends
-    # the details over multiple messages.  The full three-detail rule remains
-    # available for messages that do not contain any marker.
-    matched_keyword = next((keyword for keyword in ORDER_KEYWORDS if keyword in clean_text.lower()), None)
-
-    # Platform is useful metadata but customers often omit it.
+    # Strict 4-Condition Rule: ALL FOUR must be True
+    # (Platform + Login/Email + Password/Credential + Package)
     missing_conditions = []
+    if not platform_detected:
+        missing_conditions.append("Missing platform")
     if not login_detected:
         missing_conditions.append("Missing email/login info")
     if not credential_detected:
@@ -217,12 +215,10 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     if not package_detected:
         missing_conditions.append("Missing package")
 
-    details_detected = login_detected and credential_detected and package_detected
-    order_detected = bool(matched_keyword) or details_detected
-    if matched_keyword:
-        reason = f"Order keyword matched: {matched_keyword}"
-    elif details_detected:
-        reason = "All required core conditions satisfied"
+    order_detected = platform_detected and login_detected and credential_detected and package_detected
+
+    if order_detected:
+        reason = "All 4 required conditions satisfied"
     else:
         reason = ", ".join(missing_conditions)
 
@@ -230,7 +226,7 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     logger.info(
         f"[ORDER DETECTION] email_detected={login_detected}, credential_detected={credential_detected}, "
         f"package_detected={package_detected}, platform_detected={platform_detected}, "
-        f"email={extracted_email}, package={extracted_pkg}, platform={platform_name}, keyword={matched_keyword}"
+        f"email={extracted_email}, package={extracted_pkg}, platform={platform_name}"
     )
 
     if order_detected:

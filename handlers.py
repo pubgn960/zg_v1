@@ -113,6 +113,18 @@ def is_valid_price_string(text: str) -> bool:
     return bool(re.match(r'^\d+(\.\d+)?$', text.strip()))
 
 
+def is_loader_group_chat(chat_id: Optional[int]) -> bool:
+    """Checks if a given chat ID corresponds to a registered Loader Group."""
+    if not chat_id:
+        return False
+    if BOT_SETTINGS.get("delivery_group_id") and chat_id == BOT_SETTINGS["delivery_group_id"]:
+        return True
+    for l_info in LOADERS_CACHE.values():
+        if l_info.get("group_id") == chat_id:
+            return True
+    return False
+
+
 # ==========================================
 # Two-Group Workflow Message Handlers
 # ==========================================
@@ -131,6 +143,10 @@ async def source_group_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
 
     if not message or not chat:
+        return
+
+    # Check if chat is a Loader Group FIRST -> do NOT process as Client Group
+    if is_loader_group_chat(chat.id):
         return
 
     # Super Admin Message Routing: Check if it's calculator input first
@@ -307,6 +323,9 @@ async def edited_message_handler(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
 
     if not message or not chat:
+        return
+
+    if is_loader_group_chat(chat.id):
         return
 
     # Super Admin Ignore: Completely ignore edited messages from Super Admins
@@ -941,7 +960,7 @@ async def delivery_group_handler(update: Update, context: ContextTypes.DEFAULT_T
     text_content = message.text or message.caption or ""
 
     # Rule 2: Identify order from database using replied message ID or text Order ID
-    order = await get_order_by_loader_msg_id(reply_to.message_id)
+    order = await get_order_by_loader_msg_id(reply_to.message_id, loader_group_id=chat.id)
     if not order:
         reply_text = reply_to.text or reply_to.caption or ""
         order_id_from_text = extract_order_id(reply_text)

@@ -709,16 +709,49 @@ async def get_pending_order_by_email(email: str) -> Optional[Order]:
         return res.unique().scalars().first()
 
 
-async def get_order_by_loader_msg_id(loader_msg_id: int) -> Optional[Order]:
-    """Retrieves an Order matching loader_message_id with images eagerly loaded."""
+async def get_order_by_loader_msg_id(
+    loader_msg_id: int,
+    loader_group_id: Optional[int] = None
+) -> Optional[Order]:
+    """
+    Retrieves an Order matching loader_message_id (and optionally loader_group_id)
+    with images eagerly loaded.
+    Deterministically resolves duplicate rows by prioritizing active pending orders
+    and newest creation timestamp.
+    """
     async with AsyncSessionLocal() as session:
         stmt = (
             select(Order)
             .options(selectinload(Order.images))
             .where(Order.loader_message_id == loader_msg_id)
         )
+        if loader_group_id:
+            stmt = stmt.where((Order.loader_group_id == loader_group_id) | (Order.loader_group_id.is_(None)))
+        stmt = stmt.order_by(Order.created_at.desc())
+
         res = await session.execute(stmt)
-        return res.unique().scalar_one_or_none()
+        orders = list(res.unique().scalars().all())
+
+    if not orders:
+        return None
+
+    if len(orders) == 1:
+        return orders[0]
+
+    # Multiple matching orders found
+    order_ids = [o.id for o in orders]
+    logger.warning(f"[LOADER] Multiple matching orders found for loader message {loader_msg_id}: IDs {order_ids}")
+
+    ACTIVE_STATUSES = {"Pending", "Pending Approval", "Pending Payment", "Approved"}
+    active_orders = [o for o in orders if o.status in ACTIVE_STATUSES]
+
+    if active_orders:
+        selected = active_orders[0]  # Newest active order due to order_by(created_at.desc())
+        logger.info(f"[LOADER] Selected active order #{selected.id} (status: '{selected.status}') from duplicates.")
+        return selected
+
+    logger.warning(f"[LOADER] No active order found for loader message {loader_msg_id}")
+    return None
 
 
 async def add_images_to_order(
