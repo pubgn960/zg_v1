@@ -1,29 +1,22 @@
 """
-Flexible Real Customer Order Detection Parser for Telegram Email Image Delivery Bot.
-Classifies a customer message as an ORDER when it contains a configured quick
-order marker, or when all 3 core conditions are met:
-1. LOGIN / EMAIL INFORMATION (valid email or login/email keywords)
-2. PASSWORD / CREDENTIALS (explicit keywords or unlabelled positional password on lines following email)
-3. PACKAGE (recognized CODM/CP package quantity, alias like 880Cp/72k/10800 CP, or addition pattern like 2400+880)
-
-Platform (Facebook, FB, Activision, Meta, etc.) is OPTIONAL and will be extracted if present.
+Strict 4-Condition Real Customer Order Detection Parser for Telegram Email Image Delivery Bot.
+Classifies a customer message as an ORDER ONLY when ALL 4 conditions are met:
+1. PLATFORM (Facebook, FB, Meta, Activision, PSN, Xbox, Nintendo, Guest, Garena, Apple, Google)
+2. LOGIN / EMAIL INFORMATION (valid email or login/email keywords)
+3. PASSWORD / CREDENTIALS (explicit keywords or unlabelled positional password on lines following email)
+4. PACKAGE (recognized CODM/CP package quantity, alias like 880Cp/72k/10800 CP, or addition pattern like 2400+880)
 """
 
 import re
 import logging
 from typing import Dict, Any, Optional
+from email_parser import extract_email, EMAIL_REGEX
 
 logger = logging.getLogger(__name__)
 
-# Standard Regex pattern for detecting email addresses
-EMAIL_REGEX = re.compile(
-    r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b',
-    re.IGNORECASE
-)
-
-# Platform keywords (Facebook, FB, Meta, Activision, PSN, Xbox, Nintendo, CODM, CP, etc.)
+# Platform keywords (Facebook, FB, Meta, Activision, PSN, Xbox, Nintendo, Guest, Garena, etc.)
 PLATFORM_REGEX = re.compile(
-    r'\b(facebook|fb|meta|activision\s*id|activision|psn|playstation|xbox|nintendo|guest|codm|cp|codm\s*cp|garena|line|vk|apple|google|free)\b',
+    r'\b(facebook|fb|meta|activision\s*id|activision|psn|playstation|xbox|nintendo|guest|garena|line|vk|apple|google)\b',
     re.IGNORECASE
 )
 
@@ -33,9 +26,9 @@ LOGIN_KEYWORDS_REGEX = re.compile(
     re.IGNORECASE
 )
 
-# Explicit Password / Credential keywords
+# Explicit Password / Credential keywords (requires actual credential information)
 CREDENTIAL_REGEX = re.compile(
-    r'\b(password|pass|pwd|login|contrase[nñ]a(?:\s+de\s+fb)?|clave|c[oó]digos?|recovery(?:\s+codes?)?|backup\s+codes?|2fa|authenticator|nick|ign|usuario|nombre)\b',
+    r'\b(password|pass|pwd|contrase[nñ]a(?:\s+de\s+fb)?|clave|c[oó]digos?|recovery(?:\s+codes?)?|backup\s+codes?|2fa|authenticator)\b',
     re.IGNORECASE
 )
 
@@ -44,14 +37,6 @@ KNOWN_PACKAGES = {
     5, 80, 420, 880, 2400, 4800, 5000, 5040, 7200, 9600, 10800, 12000, 14400,
     16800, 19200, 21600, 24000, 38400, 43200, 48000, 72000, 96000, 100800, 108000
 }
-
-# User-configured quick order markers.  Any marker is sufficient to classify a
-# client message/caption as an order, even when the full details are sent later.
-ORDER_KEYWORDS = (
-    ".com", ".co", ".net", ".org", ".pk", ".io", ".gg",
-    "gmail", "gma", "hotmail", "hotmail.com", "outlook", "outlook.com",
-    "yahoo", "icloud", "proton", "+", "email",
-)
 
 # Package alias and multiplier pattern (e.g. 5k, 10k, 2.4k, 420x2, 880*3, 10800 CP, 880Cp, 5000Cp, 72k, 2400CP)
 PACKAGE_ALIAS_REGEX = re.compile(
@@ -117,9 +102,8 @@ def is_candidate_credential(line: str) -> bool:
 
 def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     """
-    Evaluates customer message against quick order markers or the full rule:
-    VALID EMAIL + VALID CREDENTIAL/LOGIN INFORMATION + VALID PACKAGE.
-    Platform is OPTIONAL.
+    Evaluates customer message against strict 4-condition rule:
+    PLATFORM + VALID EMAIL + VALID CREDENTIAL/LOGIN INFORMATION + VALID PACKAGE.
 
     Returns:
         Dict[str, Any]: Decision object containing:
@@ -148,18 +132,17 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
 
     clean_text = normalize_order_text(text)
 
-    # 1. OPTIONAL Condition: PLATFORM
+    # 1. Condition 1: PLATFORM
     plat_match = PLATFORM_REGEX.search(clean_text)
     platform_detected = bool(plat_match)
     platform_name = plat_match.group(0) if plat_match else None
 
-    # 2. Core Condition 1: LOGIN / EMAIL
-    email_match = EMAIL_REGEX.search(clean_text)
-    extracted_email = email_match.group(0).rstrip(".,;!)]>").lower() if email_match else None
+    # 2. Condition 2: LOGIN / EMAIL (Reuses email_parser.extract_email)
+    extracted_email = extract_email(clean_text)
     login_kw_match = LOGIN_KEYWORDS_REGEX.search(clean_text)
     login_detected = bool(extracted_email or login_kw_match)
 
-    # 3. Core Condition 2: PASSWORD / CREDENTIALS
+    # 3. Condition 3: PASSWORD / CREDENTIALS
     cred_match = CREDENTIAL_REGEX.search(clean_text)
     credential_detected = bool(cred_match)
 
@@ -178,7 +161,7 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
                 credential_detected = True
                 break
 
-    # 4. Core Condition 3: PACKAGE
+    # 4. Condition 4: PACKAGE
     package_detected = False
     extracted_pkg = None
 

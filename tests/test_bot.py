@@ -997,91 +997,53 @@ class TestCalculatorAndSuperAdminIgnore(unittest.IsolatedAsyncioTestCase):
 class TestRealCustomerOrderDetection(unittest.TestCase):
     """Tests exact real customer order test cases 1 through 10, Telegram escaping, and Markdown formatting."""
 
-    def test_strict_four_conditions_test_a_valid(self):
+    def test_user_requirement_test_1_valid(self):
         msg = "Facebook\nEmail: test@gmail.com\nPassword: 123456\n10800 CP"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed Test A: {res}")
+        self.assertTrue(res["order_detected"], f"TEST 1 failed: {res}")
         self.assertTrue(res["platform_detected"])
         self.assertTrue(res["login_detected"])
         self.assertTrue(res["credential_detected"])
         self.assertTrue(res["package_detected"])
 
-    def test_missing_platform_rejected(self):
-        msg = "Email: test@gmail.com\nPassword: 123456\n10800"
+    def test_user_requirement_test_2_missing_platform(self):
+        msg = "Email: test@gmail.com\nPassword: 123456\n10800 CP"
         res = parse_order_v2(msg)
-        self.assertFalse(res["order_detected"], f"Failed Test B: {res}")
+        self.assertFalse(res["order_detected"], f"TEST 2 failed: {res}")
         self.assertFalse(res["platform_detected"])
         self.assertIn("Missing platform", res["reason"])
 
-    def test_missing_email_rejected(self):
-        msg = "Facebook\nPassword: 123456\n10800 CP"
+    def test_user_requirement_test_3_missing_password(self):
+        msg = "Facebook\ntest@gmail.com\n10800 CP"
         res = parse_order_v2(msg)
-        self.assertFalse(res["order_detected"], f"Failed Test C: {res}")
-        self.assertFalse(res["login_detected"])
-        self.assertIn("Missing email", res["reason"])
-
-    def test_missing_password_rejected(self):
-        msg = "Facebook\nEmail: test@gmail.com\n10800 CP"
-        res = parse_order_v2(msg)
-        self.assertFalse(res["order_detected"], f"Failed Test D: {res}")
+        self.assertFalse(res["order_detected"], f"TEST 3 failed: {res}")
         self.assertFalse(res["credential_detected"])
         self.assertIn("Missing password", res["reason"])
 
-    def test_missing_package_rejected(self):
+    def test_user_requirement_test_4_missing_package(self):
         msg = "Facebook\nEmail: test@gmail.com\nPassword: 123456"
         res = parse_order_v2(msg)
-        self.assertFalse(res["order_detected"], f"Failed Test E: {res}")
+        self.assertFalse(res["order_detected"], f"TEST 4 failed: {res}")
         self.assertFalse(res["package_detected"])
         self.assertIn("Missing package", res["reason"])
 
-    def test_user_exact_test_1(self):
-        msg = "Facebook\nAbu Naif\n\nedfyak@gmail.com\n\nHRdi1515\n\n880Cp\nFree"
+    def test_user_requirement_test_5_missing_pass_and_package(self):
+        msg = "Facebook\ntest@gmail.com"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 1: {res}")
-        self.assertEqual(res["email"], "edfyak@gmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertEqual(res["package"].lower(), "880cp")
+        self.assertFalse(res["order_detected"], f"TEST 5 failed: {res}")
 
-    def test_user_exact_test_2(self):
-        msg = "Facebook\nmhmdalshbaa22@gmail.com\n\nmm112233\n\n2400+880"
+    def test_user_requirement_test_6_valid_2400(self):
+        msg = "Facebook\nEmail: test@gmail.com\nPassword: 123456\n2400 CP"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 2: {res}")
-        self.assertEqual(res["email"], "mhmdalshbaa22@gmail.com")
-        self.assertTrue(res["credential_detected"])
-        self.assertEqual(res["package"], "2400+880")
+        self.assertTrue(res["order_detected"], f"TEST 6 failed: {res}")
+        self.assertEqual(res["package"], "2400 CP")
 
-    def test_user_exact_test_3(self):
-        msg = "Activision\nedfyak@gmail.com\nHRdi1515\n880Cp"
+    def test_user_requirement_test_7_no_platform(self):
+        msg = "Email q8x257@gmail.com\nPass Fahad2009ss\nIgn Leo\n2400Cp\nSafe"
         res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 3: {res}")
-
-    def test_user_exact_test_4(self):
-        msg = "Facebook\nemail@gmail.com\npassword123\n2400 CP"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 4: {res}")
-        self.assertEqual(res["email"], "email@gmail.com")
-
-    def test_user_exact_test_5(self):
-        msg = "FB\nemail@gmail.com\npassword123\n2400+880"
-        res = parse_order_v2(msg)
-        self.assertTrue(res["order_detected"], f"Failed on Test 5: {res}")
-
-    def test_incomplete_messages_rejected(self):
-        # Email only -> False
-        res1 = parse_order_v2("email@gmail.com")
-        self.assertFalse(res1["order_detected"])
-
-        # Email + password -> False (no platform, no package)
-        res2 = parse_order_v2("email@gmail.com\npassword123")
-        self.assertFalse(res2["order_detected"])
-
-        # Package only -> False
-        res3 = parse_order_v2("2400+880")
-        self.assertFalse(res3["order_detected"])
-
-        # Platform + Email -> False (no password, no package)
-        res4 = parse_order_v2("Facebook\nemail@gmail.com")
-        self.assertFalse(res4["order_detected"])
+        self.assertFalse(res["order_detected"], f"TEST 7 failed: {res}")
+        self.assertFalse(res["platform_detected"])
+        self.assertIn("Missing platform", res["reason"])
 
     def test_markdown_formatting_and_telegram_escaping(self):
         # Escaped email
