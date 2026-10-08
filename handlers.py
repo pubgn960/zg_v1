@@ -21,7 +21,7 @@ import shutil
 import logging
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, List, Tuple, Set, Optional, Union, Any
 from telegram import MessageEntity, Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ApplicationHandlerStop
 from telegram.error import TelegramError
