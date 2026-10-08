@@ -1,10 +1,10 @@
 """
-Strict 4-Condition Real Customer Order Detection Parser for Telegram Email Image Delivery Bot.
-Classifies a customer message as an ORDER ONLY when ALL 4 conditions are met:
-1. PLATFORM (Facebook, FB, Meta, Activision, PSN, Xbox, Nintendo, Guest, Garena, Apple, Google)
-2. LOGIN / EMAIL INFORMATION (valid email or login/email keywords)
-3. PASSWORD / CREDENTIALS (explicit keywords or unlabelled positional password on lines following email)
-4. PACKAGE (recognized CODM/CP package quantity, alias like 880Cp/72k/10800 CP, or addition pattern like 2400+880)
+Email + CP Package Real Customer Order Detection Parser for Telegram Email Image Delivery Bot.
+Classifies a customer message as an ORDER ONLY when BOTH core conditions are met:
+1. VALID EMAIL / LOGIN INFORMATION
+2. CP PACKAGE (recognized CODM/CP package quantity, alias like 880Cp/72k/10800 CP, or addition pattern like 2400+880)
+
+Platform and Password/Credentials are extracted as optional metadata if present.
 """
 
 import re
@@ -102,8 +102,8 @@ def is_candidate_credential(line: str) -> bool:
 
 def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     """
-    Evaluates customer message against strict 4-condition rule:
-    PLATFORM + VALID EMAIL + VALID CREDENTIAL/LOGIN INFORMATION + VALID PACKAGE.
+    Evaluates customer message against Email + CP Package rule:
+    VALID EMAIL + VALID CP PACKAGE.
 
     Returns:
         Dict[str, Any]: Decision object containing:
@@ -132,21 +132,20 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
 
     clean_text = normalize_order_text(text)
 
-    # 1. Condition 1: PLATFORM
+    # Optional Metadata Extraction: PLATFORM
     plat_match = PLATFORM_REGEX.search(clean_text)
     platform_detected = bool(plat_match)
     platform_name = plat_match.group(0) if plat_match else None
 
-    # 2. Condition 2: LOGIN / EMAIL (Reuses email_parser.extract_email)
+    # Core Condition 1: LOGIN / EMAIL (Reuses email_parser.extract_email)
     extracted_email = extract_email(clean_text)
     login_kw_match = LOGIN_KEYWORDS_REGEX.search(clean_text)
-    login_detected = bool(extracted_email or login_kw_match)
+    email_detected = bool(extracted_email or login_kw_match)
 
-    # 3. Condition 3: PASSWORD / CREDENTIALS
+    # Optional Metadata Extraction: PASSWORD / CREDENTIALS
     cred_match = CREDENTIAL_REGEX.search(clean_text)
     credential_detected = bool(cred_match)
 
-    # Positional unlabelled credential check (lines following email)
     lines = [l.strip() for l in clean_text.splitlines() if l.strip()]
     email_line_idx = None
     if extracted_email:
@@ -161,11 +160,11 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
                 credential_detected = True
                 break
 
-    # 4. Condition 4: PACKAGE
+    # Core Condition 2: CP PACKAGE
     package_detected = False
     extracted_pkg = None
 
-    # First check multi-package addition pattern (e.g. 2400+880, 420+880+2400)
+    # Check multi-package addition pattern (e.g. 2400+880, 420+880+2400)
     add_match = ADDITION_PACKAGE_REGEX.search(clean_text)
     if add_match:
         package_detected = True
@@ -186,30 +185,24 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
                     extracted_pkg = f"{num_val} CP"
                     break
 
-    # Strict 4-Condition Rule: ALL FOUR must be True
-    # (Platform + Login/Email + Password/Credential + Package)
+    # Final Order Detection Rule: EMAIL + CP PACKAGE ONLY
     missing_conditions = []
-    if not platform_detected:
-        missing_conditions.append("Missing platform")
-    if not login_detected:
-        missing_conditions.append("Missing email/login info")
-    if not credential_detected:
-        missing_conditions.append("Missing password/login details")
+    if not email_detected:
+        missing_conditions.append("Missing email")
     if not package_detected:
         missing_conditions.append("Missing package")
 
-    order_detected = platform_detected and login_detected and credential_detected and package_detected
+    order_detected = email_detected and package_detected
 
     if order_detected:
-        reason = "All 4 required conditions satisfied"
+        reason = "All required conditions satisfied (Email + CP Package)"
     else:
         reason = ", ".join(missing_conditions)
 
     # Structured Debug Logging
     logger.info(
-        f"[ORDER DETECTION] email_detected={login_detected}, credential_detected={credential_detected}, "
-        f"package_detected={package_detected}, platform_detected={platform_detected}, "
-        f"email={extracted_email}, package={extracted_pkg}, platform={platform_name}"
+        f"[ORDER DETECTION] email_detected={email_detected}, package_detected={package_detected}, "
+        f"email={extracted_email}, package={extracted_pkg}"
     )
 
     if order_detected:
@@ -220,7 +213,7 @@ def parse_order_v2(text: Optional[str]) -> Dict[str, Any]:
     return {
         "order_detected": order_detected,
         "platform_detected": platform_detected,
-        "login_detected": login_detected,
+        "login_detected": email_detected,
         "credential_detected": credential_detected,
         "package_detected": package_detected,
         "platform": platform_name,
